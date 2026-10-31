@@ -260,6 +260,30 @@ Formulir **Terbitkan Lisensi Baru** tetap tersedia untuk lisensi
 kedua yang berjalan bersamaan atau sesudah pencabutan. Aturan yang
 sama akan berlaku untuk checkout Midtrans di milestone pembayaran.
 
+**Satu akun, satu lisensi (v0.6.2):** keputusan pemilik setelah
+menguji dashboard — satu akun tenant hanya boleh memiliki **satu**
+lisensi yang belum dicabut (`License::liveForTenant`). Selama
+lisensi hidup itu ada, formulir **Terbitkan Lisensi Baru** di
+detail tenant digantikan catatan satu baris, dan rute
+penerbitannya (`POST /admin/tenants/{id}/licenses`) pun menolak
+dengan pesan galat — lisensi baru hanya bisa terbit bila tenant
+belum punya lisensi sama sekali atau semua lisensinya sudah
+dicabut. Lisensi yang berjalan hanya tumbuh dengan dua cara:
+**Tambah Masa Aktif** (di atas) dan **Tambah Perangkat**
+(`POST /admin/licenses/{id}/devices/add` →
+`License::addDevices`, +1..20 perangkat per aksi) yang menaikkan
+batas perangkat lisensi melampaui bawaan plan-nya — snapshot plan
+dan kolom `max_devices` diperbarui bersamaan agar entitlement API
+ikut berubah; lisensi tanpa batas (0) tetap tanpa batas.
+Tombol **Perpanjang** per lisensi dicabut dari tabel karena
+perpanjangan kini terpusat di kartu Tambah Masa Aktif (rute renew
+lama masih terdaftar tetapi tidak lagi ditautkan dari dashboard).
+Tenant lama yang datanya telanjur berisi banyak lisensi tetap
+tampil semua sebagai riwayat; yang dicabut tidak bisa diubah
+lagi, dan satu-satunya lisensi hidupnya adalah tempat Tambah Masa
+Aktif/Tambah Perangkat bekerja — untuk menggantinya, cabut dulu
+lisensi hidup itu, lalu terbitkan yang baru.
+
 ## Roadmap milestone
 
 - **M1 — Fondasi (selesai):** scaffold ini — router, konfigurasi

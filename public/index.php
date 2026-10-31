@@ -22,6 +22,7 @@ declare(strict_types=1);
  *   POST /api/license/activate|validate -> API aplikasi booth  (M4)
  *   POST /api/app/login|me|logout -> sesi aplikasi via akun     (M4c)
  *   POST cabut perangkat: /tenant/licenses/... & /admin/...    (M4c)
+ *   POST /admin/licenses/{id}/devices/add -> tambah perangkat  (M4)
  *   GET|POST /api/automation/* -> pengingat perpanjangan n8n   (M4)
  *
  * Grup API lain di bawah masih STUB 501 bertanda TODO; logika
@@ -1058,6 +1059,9 @@ $router->get('/admin/tenants/{id}', static function (array $params): void {
 
         $tenantUsers = Tenant::usersOf($pdo, $id);
         $licenses = License::forTenant($pdo, $id);
+        // Satu akun satu lisensi (v0.6.2): formulir penerbitan
+        // hanya tampil bila tenant belum punya lisensi hidup.
+        $liveLicense = License::liveForTenant($pdo, $id);
         $devicesByLicense = [];
         foreach ($licenses as $licenseRow) {
             try {
@@ -1088,6 +1092,7 @@ $router->get('/admin/tenants/{id}', static function (array $params): void {
         'tenant' => $tenant,
         'tenantUsers' => $tenantUsers,
         'licenses' => $licenses,
+        'liveLicense' => $liveLicense,
         'devicesByLicense' => $devicesByLicense,
         'activePlans' => $activePlans,
         'newKey' => is_string($newKey) ? $newKey : null,
@@ -1253,6 +1258,20 @@ $router->post('/admin/tenants/{id}/licenses', static function (array $params): v
             'appUrl' => Config::appUrl(),
         ], 404);
         return;
+    }
+
+    // Satu akun hanya memiliki satu lisensi (v0.6.2): selama
+    // tenant masih punya lisensi yang belum dicabut, penerbitan
+    // lisensi tambahan ditolak — pertumbuhan lisensi berjalan
+    // hanya lewat Tambah Masa Aktif / Tambah Perangkat.
+    try {
+        $liveLicense = License::liveForTenant($pdo, $id);
+    } catch (PDOException) {
+        $liveLicense = null;
+    }
+    if ($liveLicense !== null) {
+        Flash::error('Tenant ini sudah memiliki lisensi. Satu akun hanya memiliki satu lisensi — gunakan Tambah Masa Aktif atau Tambah Perangkat.');
+        redirect('/admin/tenants/' . $id);
     }
 
     $plan = Plan::find($pdo, (int) ($_POST['plan_id'] ?? 0));
@@ -1501,6 +1520,64 @@ $router->post('/admin/licenses/{licenseId}/devices/{deviceId}/revoke', static fu
     }
 
     Flash::success('Perangkat dicabut dari lisensi ini — slot tersedia lagi.');
+    redirect('/admin/tenants/' . $tenantId);
+});
+
+/**
+ * Tambah Perangkat (v0.6.2): naikkan batas perangkat lisensi yang
+ * berjalan melampaui bawaan plan-nya, tanpa menerbitkan lisensi
+ * baru dan tanpa mengubah masa aktifnya.
+ */
+$router->post('/admin/licenses/{id}/devices/add', static function (array $params): void {
+    Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, batas perangkat belum dapat diubah.');
+        redirect('/admin');
+    }
+
+    $license = License::find($pdo, (int) ($params['id'] ?? 0));
+    if ($license === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $tenantId = (int) $license['tenant_id'];
+
+    if ((string) $license['status'] === 'revoked') {
+        Flash::error('Lisensi yang sudah dicabut tidak dapat diubah lagi.');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    $amountRaw = $_POST['amount'] ?? null;
+    $amount = is_numeric($amountRaw) ? (int) $amountRaw : 0;
+    if ($amount < 1 || $amount > 20) {
+        Flash::error('Jumlah perangkat tambahan harus antara 1 dan 20.');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    try {
+        $newMax = License::addDevices($pdo, (int) $license['id'], $amount);
+    } catch (PDOException) {
+        Flash::error('Batas perangkat gagal diubah. Pastikan migrasi Milestone 4 (kolom plan_snapshot) sudah dijalankan.');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    if ($newMax === null) {
+        // Status dicabut sudah disaring di atas, jadi null di sini
+        // berarti lisensinya memang sudah tanpa batas perangkat.
+        Flash::info('Lisensi ini sudah tanpa batas perangkat.');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    $tenant = Tenant::find($pdo, $tenantId);
+    $vendor = $tenant !== null ? Tenant::displayName($tenant) : 'tenant ini';
+    Flash::success('Batas perangkat ditambah ' . $amount . ' — kini maksimal ' . $newMax . ' perangkat untuk ' . $vendor . '.');
     redirect('/admin/tenants/' . $tenantId);
 });
 

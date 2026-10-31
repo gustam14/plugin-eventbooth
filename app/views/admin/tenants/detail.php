@@ -9,6 +9,7 @@
  * @var array<string, mixed> $tenant Baris tenant.
  * @var array<int, array<string, mixed>> $tenantUsers Baris users milik tenant.
  * @var array<int, array<string, mixed>> $licenses Baris licenses + plan_name & device_count.
+ * @var array<string, mixed>|null $liveLicense Lisensi hidup tenant (belum dicabut), bila ada (v0.6.2).
  * @var array<int, array<int, array<string, mixed>>> $devicesByLicense Baris perangkat per ID lisensi (M4c).
  * @var array<int, array<string, mixed>> $activePlans Plan aktif untuk formulir penerbitan.
  * @var string|null $newKey Kunci lisensi yang BARU diterbitkan (tampil satu kali).
@@ -179,6 +180,13 @@ $roleLabel = static function (string $role): string {
         </form>
     </div>
 
+    <?php if (($liveLicense ?? null) !== null): ?>
+        <p class="hint" style="margin-bottom: 20px;">
+            Satu akun hanya memiliki satu lisensi. Untuk memperpanjang gunakan
+            Tambah Masa Aktif; untuk menambah batas perangkat gunakan Tambah
+            Perangkat pada lisensi.
+        </p>
+    <?php else: ?>
     <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 8px;">Terbitkan Lisensi Baru</h3>
     <form method="post" action="/admin/tenants/<?= $tenantId ?>/licenses" style="margin-bottom: 20px;">
         <?= Auth::csrfField() ?>
@@ -203,6 +211,7 @@ $roleLabel = static function (string $role): string {
             <div class="hint" style="margin-top: 8px;">Tidak ada plan aktif. Aktifkan plan dulu di menu Plan Lisensi.</div>
         <?php endif; ?>
     </form>
+    <?php endif; ?>
 
     <?php if (($licenses ?? []) === []): ?>
         <p class="hint">Tenant ini belum memiliki lisensi.</p>
@@ -250,16 +259,23 @@ $roleLabel = static function (string $role): string {
                     <td>
                         <?= (int) ($license['device_count'] ?? 0) ?> /
                         <?= $ent['max_devices'] === 0 ? '∞' : (string) $ent['max_devices'] ?>
+                        <?php if ((string) ($license['status'] ?? '') !== 'revoked'): ?>
+                            <?php if ($ent['max_devices'] === 0): ?>
+                                <br><span class="hint">tanpa batas</span>
+                            <?php else: ?>
+                                <form method="post" action="/admin/licenses/<?= $licenseId ?>/devices/add"
+                                      style="display: flex; gap: 6px; align-items: center; margin-top: 8px;">
+                                    <?= Auth::csrfField() ?>
+                                    <input type="number" name="amount" min="1" max="20" value="1"
+                                           style="width: 62px;" aria-label="Jumlah perangkat tambahan">
+                                    <button class="btn btn-small" type="submit">Tambah Perangkat</button>
+                                </form>
+                            <?php endif; ?>
+                        <?php endif; ?>
                     </td>
                     <td><?= !empty($license['last_seen_at']) ? e((string) $license['last_seen_at']) : '—' ?></td>
                     <td>
                         <div class="row-actions">
-                            <?php if (!empty($license['expires_at']) && $effective !== 'revoked'): ?>
-                                <form method="post" action="/admin/licenses/<?= $licenseId ?>/renew">
-                                    <?= Auth::csrfField() ?>
-                                    <button class="btn btn-small" type="submit">Perpanjang</button>
-                                </form>
-                            <?php endif; ?>
                             <?php if ($effective === 'active' || $effective === 'pending'): ?>
                                 <form method="post" action="/admin/licenses/<?= $licenseId ?>/suspend"
                                       onsubmit="return confirm('Tangguhkan lisensi ini? Aplikasi booth tenant akan ditolak sampai diaktifkan lagi.');">

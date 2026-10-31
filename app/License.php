@@ -32,6 +32,11 @@ declare(strict_types=1);
  *     acak yang hash-nya disimpan di license_devices.access_token_hash
  *     (migrasi M4c). Jalur kunci (activate/validate) tetap hidup
  *     sebagai cadangan.
+ *   - Satu akun, satu lisensi (v0.6.2): tenant hanya boleh punya
+ *     SATU lisensi yang belum dicabut (liveForTenant()); penerbitan
+ *     lisensi tambahan ditolak. Lisensi yang berjalan hanya tumbuh
+ *     lewat perpanjangan masa aktif (extendWithPlan) dan penambahan
+ *     batas perangkat (addDevices).
  */
 final class License
 {
@@ -180,6 +185,37 @@ final class License
         });
 
         return $active[0];
+    }
+
+    /**
+     * "Lisensi hidup" milik tenant (aturan satu akun satu lisensi,
+     * v0.6.2): lisensi yang status TERsimpannya bukan 'revoked'.
+     * Bila ada lisensi yang sedang dipakai aplikasi, itulah
+     * hasilnya (currentForTenant()); bila tidak ada yang aktif,
+     * lisensi bukan-revoked paling baru yang menang — mencakup
+     * lisensi kedaluwarsa/tersuspensi yang masih bisa dihidupkan
+     * lewat Tambah Masa Aktif. Null bila tenant belum punya
+     * lisensi sama sekali atau semua lisensinya sudah dicabut —
+     * hanya dalam keadaan itu lisensi baru boleh diterbitkan.
+     *
+     * @return array<string, mixed>|null Baris lisensi (+ plan_name & device_count).
+     */
+    public static function liveForTenant(PDO $pdo, int $tenantId): ?array
+    {
+        $current = self::currentForTenant($pdo, $tenantId);
+        if ($current !== null) {
+            return $current;
+        }
+
+        // forTenant() terurut id DESC: baris bukan-revoked pertama
+        // adalah lisensi non-cabut paling baru.
+        foreach (self::forTenant($pdo, $tenantId) as $license) {
+            if ((string) ($license['status'] ?? '') !== 'revoked') {
+                return $license;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -506,17 +542,9 @@ final class License
     {
         $tenantId = (int) $tenant['id'];
 
-        $target = self::currentForTenant($pdo, $tenantId);
-        if ($target === null) {
-            // forTenant() terurut id DESC: baris bukan-revoked
-            // pertama adalah lisensi non-cabut paling baru.
-            foreach (self::forTenant($pdo, $tenantId) as $license) {
-                if ((string) ($license['status'] ?? '') !== 'revoked') {
-                    $target = $license;
-                    break;
-                }
-            }
-        }
+        // Pemilihan target (a)/(b) di atas persis aturan
+        // liveForTenant() — satu-satunya lisensi hidup tenant.
+        $target = self::liveForTenant($pdo, $tenantId);
         if ($target === null) {
             return null;
         }
@@ -569,6 +597,60 @@ final class License
     /* -----------------------------------------------------------------
      * Perangkat (license_devices)
      * --------------------------------------------------------------- */
+
+    /**
+     * Tambah Perangkat (v0.6.2): naikkan batas perangkat lisensi
+     * yang berjalan melampaui bawaan plan-nya — salah satu dari
+     * hanya dua cara lisensi hidup bertumbuh (selain Tambah Masa
+     * Aktif). Jumlah dibatasi 1..20 per aksi. Lisensi tanpa batas
+     * (batas 0) tidak berubah dan hasilnya null; lisensi yang
+     * sudah dicabut juga null — pemanggil membedakan keduanya dari
+     * status barisnya. Batas efektif dibaca dari snapshot plan
+     * (entitlements()), jadi snapshot DAN kolom max_devices samasama
+     * diperbarui agar API aplikasi dan dashboard konsisten.
+     *
+     * @return int|null Batas perangkat baru, atau null bila tidak berubah.
+     */
+    public static function addDevices(PDO $pdo, int $licenseId, int $amount): ?int
+    {
+        $amount = max(1, min(20, $amount));
+
+        $license = self::find($pdo, $licenseId);
+        if ($license === null) {
+            return null;
+        }
+        if ((string) ($license['status'] ?? '') === 'revoked') {
+            return null;
+        }
+
+        $currentMax = self::entitlements($license)['max_devices'];
+        if ($currentMax === 0) {
+            return null; // Sudah tanpa batas: tidak ada yang ditambah.
+        }
+
+        $newMax = $currentMax + $amount;
+
+        $snapshot = self::snapshotOf($license);
+        $snapshotJson = null;
+        if ($snapshot !== null) {
+            $snapshot['max_devices'] = $newMax;
+            $snapshotJson = json_encode(
+                $snapshot,
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+            );
+        }
+
+        $stmt = $pdo->prepare(
+            'UPDATE licenses SET max_devices = :max_devices, plan_snapshot = :snapshot WHERE id = :id'
+        );
+        $stmt->execute([
+            'max_devices' => $newMax,
+            'snapshot' => $snapshotJson,
+            'id' => $licenseId,
+        ]);
+
+        return $newMax;
+    }
 
     public static function deviceCount(PDO $pdo, int $licenseId): int
     {
