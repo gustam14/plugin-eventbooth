@@ -11,6 +11,7 @@ declare(strict_types=1);
  *   GET|POST /login, POST /logout, GET /dashboard             (M2)
  *   GET  /admin, CRUD plan di /admin/plans                    (M2)
  *   GET  /tenant                                              (M2)
+ *   GET|POST /account/password -> ganti kata sandi            (M2.1)
  *
  * Grup API lain di bawah masih STUB 501 bertanda TODO; logika
  * bisnisnya (lisensi, Midtrans, Drive, sesi) dibangun bertahap
@@ -96,6 +97,120 @@ $router->post('/logout', static function (): void {
 $router->get('/dashboard', static function (): void {
     $user = Auth::requireLogin();
     redirect($user['role'] === 'super_admin' ? '/admin' : '/tenant');
+});
+
+/* ---------------------------------------------------------------------
+ * Akun pengguna (Milestone 2.1) — ganti kata sandi, terbuka untuk
+ * SEMUA role yang sudah login (super_admin, tenant_admin,
+ * tenant_staff). Kata sandi tidak pernah dicatat ke log, disimpan
+ * sebagai isian lama, atau ditampilkan kembali.
+ * ------------------------------------------------------------------- */
+$router->get('/account/password', static function (): void {
+    $user = Auth::requireLogin();
+
+    View::render('account/password', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'errors' => [],
+    ]);
+});
+
+$router->post('/account/password', static function (): void {
+    $user = Auth::requireLogin();
+    Auth::requireCsrf();
+
+    // Render ulang formulir dengan error per kolom (pola yang sama
+    // seperti formulir plan: HTTP 422, tanpa redirect).
+    $renderForm = static function (array $errors) use ($user): void {
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('account/password', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'errors' => $errors,
+        ], 422);
+    };
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel. Kata sandi belum dapat diganti — hubungi administrator server.');
+        redirect('/account/password');
+    }
+
+    $currentPassword = (string) ($_POST['current_password'] ?? '');
+    $newPassword = (string) ($_POST['new_password'] ?? '');
+    $confirmation = (string) ($_POST['new_password_confirmation'] ?? '');
+
+    try {
+        $stmt = $pdo->prepare(
+            'SELECT password_hash FROM users WHERE id = :id LIMIT 1'
+        );
+        $stmt->execute(['id' => $user['id']]);
+        $row = $stmt->fetch();
+    } catch (PDOException) {
+        Flash::error('Kata sandi gagal diganti. Silakan coba lagi.');
+        redirect('/account/password');
+    }
+
+    if ($row === false) {
+        Flash::error('Kata sandi gagal diganti. Silakan coba lagi.');
+        redirect('/account/password');
+    }
+
+    $currentHash = (string) $row['password_hash'];
+
+    // Semua pesan error sengaja umum: tidak membocorkan detail
+    // internal akun selain yang memang perlu diketahui pemiliknya.
+    $errors = [];
+
+    if ($currentPassword === '') {
+        $errors['current_password'] = 'Kata sandi saat ini wajib diisi.';
+    } elseif (!password_verify($currentPassword, $currentHash)) {
+        $errors['current_password'] = 'Kata sandi saat ini salah.';
+    }
+
+    if ($newPassword === '') {
+        $errors['new_password'] = 'Kata sandi baru wajib diisi.';
+    } elseif (strlen($newPassword) < 10) {
+        $errors['new_password'] = 'Kata sandi baru minimal 10 karakter.';
+    } elseif ($errors === [] && $newPassword === $currentPassword) {
+        // Hanya diperiksa setelah kata sandi saat ini terbukti benar.
+        $errors['new_password'] = 'Kata sandi baru harus berbeda dari kata sandi saat ini.';
+    }
+
+    if ($confirmation === '') {
+        $errors['new_password_confirmation'] = 'Konfirmasi kata sandi baru wajib diisi.';
+    } elseif ($newPassword !== '' && $confirmation !== $newPassword) {
+        $errors['new_password_confirmation'] = 'Konfirmasi tidak sama dengan kata sandi baru.';
+    }
+
+    if ($errors !== []) {
+        $renderForm($errors);
+        return;
+    }
+
+    try {
+        $update = $pdo->prepare(
+            'UPDATE users SET password_hash = :hash WHERE id = :id'
+        );
+        $update->execute([
+            'hash' => password_hash($newPassword, PASSWORD_DEFAULT),
+            'id' => $user['id'],
+        ]);
+    } catch (PDOException) {
+        Flash::error('Kata sandi gagal diganti. Silakan coba lagi.');
+        redirect('/account/password');
+    }
+
+    // Perbarui ID session setelah kredensial berubah — pola yang
+    // sama seperti saat login (mencegah pemakaian ulang sesi lama).
+    Auth::start();
+    session_regenerate_id(true);
+
+    Flash::success('Kata sandi berhasil diganti. Gunakan kata sandi baru pada login berikutnya.');
+    redirect('/dashboard');
 });
 
 /* ---------------------------------------------------------------------

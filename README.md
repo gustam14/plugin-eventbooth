@@ -103,6 +103,11 @@ akun bawaan dan tidak ada kata sandi bawaan di repo ini.
    komputer kamu. Jangan pernah commit salinan itu ke Git.
 5. Masuk lewat `https://plugin.eventbooth.id/login` — pengguna ini
    berperan `super_admin` dan diarahkan ke `/admin`.
+6. Bila kata sandi pada langkah 1 bersifat sementara (misalnya
+   hash-nya dibuatkan oleh orang lain), **segera ganti setelah
+   login pertama** lewat menu **Ganti Kata Sandi** di dashboard
+   (`/account/password`). Kata sandi baru minimal 10 karakter dan
+   harus berbeda dari kata sandi sementara itu.
 
 Akun tenant dan pengguna tenant dibuat dari dashboard Super Admin
 pada milestone berikutnya.
