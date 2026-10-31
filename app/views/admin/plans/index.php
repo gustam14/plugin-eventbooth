@@ -18,7 +18,6 @@ $fmtQuota = static function ($value): string {
     return $n === 0 ? 'Tanpa batas' : number_format($n, 0, ',', '.');
 };
 ?>
-<h1>Plan Lisensi</h1>
 <p class="sub">
     Plan diatur dari halaman ini (tidak di-hardcode). Nilai 0 pada
     kolom batas berarti <strong>tanpa batas</strong>.
@@ -30,6 +29,7 @@ $fmtQuota = static function ($value): string {
         <p>Belum ada plan. Klik <strong>Tambah Plan</strong> untuk membuat plan pertama.</p>
     </div>
 <?php else: ?>
+    <div class="table-wrap">
     <table class="list">
         <thead>
         <tr>
@@ -82,5 +82,6 @@ $fmtQuota = static function ($value): string {
         <?php endforeach; ?>
         </tbody>
     </table>
+    </div>
 <?php endif; ?>
 <?php require BASE_PATH . '/app/views/partials/dashboard_bottom.php'; ?>

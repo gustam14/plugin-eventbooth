@@ -22,19 +22,21 @@ $statusLabel = static function (?string $status): string {
     };
 };
 ?>
-<h1>Ringkasan Tenant</h1>
 <p class="sub">Selamat datang, <?= e($user['name']) ?>. Ini ringkasan akun booth kamu.</p>
 
-<div class="stats" style="grid-template-columns: repeat(3, 1fr);">
+<div class="stats stats-3">
     <div class="stat">
+        <span class="icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 9.8h18M8 3v4M16 3v4"/></svg></span>
         <div class="num"><?= number_format((int) ($counts['events'] ?? 0), 0, ',', '.') ?></div>
         <div class="lbl">Event Saya</div>
     </div>
     <div class="stat">
+        <span class="icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4.2"/><path d="M11.2 11.8 20 3M16.5 6.5l2.8 2.8M13.8 9.2l2.3 2.3"/></svg></span>
         <div class="num"><?= number_format((int) ($counts['licenses'] ?? 0), 0, ',', '.') ?></div>
         <div class="lbl">Lisensi Saya</div>
     </div>
     <div class="stat">
+        <span class="icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.6L8.5 5.5h7L17.4 8H20a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="13.2" r="3.4"/></svg></span>
         <div class="num"><?= number_format((int) ($counts['sessions'] ?? 0), 0, ',', '.') ?></div>
         <div class="lbl">Sesi Foto</div>
     </div>

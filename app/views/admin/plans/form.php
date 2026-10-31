@@ -21,10 +21,9 @@ $err = static function (string $field) use ($errors): string {
         : '';
 };
 ?>
-<h1><?= e($heading) ?></h1>
 <p class="sub">Kolom batas bernilai 0 berarti <strong>tanpa batas</strong>.</p>
 
-<div class="panel-box">
+<div class="panel-box form-panel">
     <form method="post" action="<?= e($action) ?>">
         <?= Auth::csrfField() ?>
 

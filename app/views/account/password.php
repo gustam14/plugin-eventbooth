@@ -20,10 +20,9 @@ $err = static function (string $field) use ($errors): string {
         : '';
 };
 ?>
-<h1>Ganti Kata Sandi</h1>
 <p class="sub">Kata sandi baru minimal <strong>10 karakter</strong> dan harus berbeda dari kata sandi saat ini.</p>
 
-<div class="panel-box">
+<div class="panel-box form-panel">
     <form method="post" action="/account/password">
         <?= Auth::csrfField() ?>
 
