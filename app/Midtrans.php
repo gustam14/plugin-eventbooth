@@ -141,6 +141,19 @@ final class Midtrans
                 'email' => (string) ($tenant['email'] ?? ''),
                 'phone' => (string) (($tenant['whatsapp'] ?? '') !== '' ? $tenant['whatsapp'] : ($tenant['phone'] ?? '')),
             ],
+            // Alamat kembali setelah pembayaran (v0.8.2): metode
+            // deeplink seperti GoPay membawa pembayar KELUAR dari
+            // halaman kita, sehingga callback JavaScript Snap tidak
+            // sempat berjalan — tanpa callbacks.finish pembayar
+            // terdampar di halaman Midtrans. Status resmi tetap
+            // ditentukan webhook; alamat ini murni urusan tampilan.
+            'callbacks' => [
+                'finish' => Config::appUrl() . '/tenant/licenses?pay=success',
+            ],
+            'gopay' => [
+                'enable_callback' => true,
+                'callback_url' => Config::appUrl() . '/tenant/licenses?pay=success',
+            ],
         ];
 
         $url = self::apiBase($config['environment']) . '/snap/v1/transactions';

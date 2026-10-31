@@ -449,6 +449,17 @@ dengan pembayaran Midtrans milik platform:
   di pesanan; notifikasi berulang bersifat idempoten. Callback
   JavaScript Snap hanya mengarahkan tampilan, tidak pernah
   dianggap bukti lunas.
+- **Kembali ke dashboard + notifikasi WA (v0.8.2):** payload
+  Snap kini menyertakan `callbacks.finish` (dan callback GoPay)
+  ke `/tenant/licenses?pay=success`, karena metode deeplink
+  seperti GoPay membawa pembayar keluar dari halaman sehingga
+  callback JavaScript tidak berjalan dan pembayar terdampar di
+  halaman Midtrans. Tepat setelah lisensi dipenuhi, webhook
+  juga mengirim **notifikasi WhatsApp ke tenant** lewat MPWA
+  (kelas `Mpwa`): API key MPWA disimpan terenkripsi dari kartu
+  di `/admin/payments`, nomor pengirim memakai `mpwa_sender`,
+  dan pengiriman bersifat best-effort — kegagalan gateway tidak
+  menggagalkan pencatatan pembayaran.
 
 Uji coba: gunakan kunci Sandbox (awalan `SB-Mid-...`) dengan
 environment Sandbox, lalu bayar memakai metode uji Midtrans —

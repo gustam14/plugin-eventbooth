@@ -1114,10 +1114,14 @@ $router->get('/admin/payments', static function (): void {
     $midtrans = ['environment' => 'sandbox', 'client_key' => null, 'server_key' => null, 'configured' => false];
     $orders = [];
     $ordersReady = true;
+    $mpwaApiKeyStored = false;
+    $mpwaSender = null;
     $pdo = Database::pdo();
     if ($pdo !== null) {
         try {
             $midtrans = Midtrans::config($pdo);
+            $mpwaApiKeyStored = Mpwa::apiKey($pdo) !== null;
+            $mpwaSender = Whatsapp::normalize(Settings::get($pdo, 'mpwa_sender'));
         } catch (PDOException) {
             // Pengaturan belum terbaca; tampilkan keadaan kosong.
         }
@@ -1148,7 +1152,37 @@ $router->get('/admin/payments', static function (): void {
         'orders' => $orders,
         'ordersReady' => $ordersReady,
         'notifyUrl' => Midtrans::notifyUrl(),
+        'mpwaApiKeyStored' => $mpwaApiKeyStored,
+        'mpwaSender' => $mpwaSender,
     ]);
+});
+
+$router->post('/admin/payments/mpwa', static function (): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, API key MPWA belum dapat disimpan.');
+        redirect('/admin');
+    }
+
+    $plain = trim((string) ($_POST['mpwa_api_key'] ?? ''));
+    if ($plain === '') {
+        Flash::error('API key MPWA kosong — tidak ada yang disimpan.');
+        redirect('/admin/payments');
+    }
+
+    try {
+        Mpwa::saveApiKey($pdo, $plain, $user['id']);
+        Flash::success('API key MPWA disimpan. Notifikasi WhatsApp pembayaran lunas kini aktif.');
+    } catch (MidtransException $e) {
+        Flash::error($e->getMessage());
+    } catch (PDOException) {
+        Flash::error('API key MPWA gagal disimpan. Silakan coba lagi.');
+    }
+
+    redirect('/admin/payments');
 });
 
 $router->post('/admin/payments/settings', static function (): void {
@@ -2908,6 +2942,9 @@ $router->post('/api/payments/midtrans/notify', static function () use ($readJson
 
     if ($finalStatus === 'paid' && !$wasPaid && (string) $payment['purpose'] === 'license') {
         $licenseId = $payment['license_id'] !== null ? (int) $payment['license_id'] : null;
+        $waTenant = null;
+        $waPlan = null;
+        $waLicense = null;
         try {
             $tenant = $payment['tenant_id'] !== null
                 ? Tenant::find($pdo, (int) $payment['tenant_id'])
@@ -2928,6 +2965,9 @@ $router->post('/api/payments/midtrans/notify', static function () use ($readJson
                     $license = License::issue($pdo, (int) $tenant['id'], $plan);
                 }
                 $licenseId = (int) $license['id'];
+                $waTenant = $tenant;
+                $waPlan = $plan;
+                $waLicense = $license;
             }
         } catch (Throwable) {
             // Pembayaran tetap tercatat lunas; perpanjangan yang
@@ -2951,6 +2991,11 @@ $router->post('/api/payments/midtrans/notify', static function () use ($readJson
         } catch (PDOException) {
             // Pencatatan waktu lunas best-effort; status sudah 'paid'.
         }
+
+        // Notifikasi WhatsApp ke tenant (v0.8.2): dikirim langsung
+        // lewat MPWA dari sini agar tiba seketika; best-effort,
+        // kegagalannya tidak mengubah hasil webhook.
+        Mpwa::notifyPaymentSuccess($pdo, $payment, $waTenant, $waPlan, $waLicense);
     }
 
     Json::respond(['ok' => true, 'status' => $finalStatus]);

@@ -15,6 +15,8 @@
  * @var array<int, array<string, mixed>> $orders
  * @var bool $ordersReady
  * @var string $notifyUrl
+ * @var bool $mpwaApiKeyStored
+ * @var string|null $mpwaSender
  */
 
 $title = 'Pembayaran';
@@ -83,6 +85,35 @@ $fmtRupiah = static fn ($amount): string => 'Rp ' . number_format((float) $amoun
         utama) tanpa bentrok. Notifikasi yang tiba selalu
         diverifikasi tanda tangannya di server sebelum dipercaya.
     </p>
+</div>
+
+<div class="panel-box form-panel" style="margin-bottom: 22px;">
+    <h2 style="margin-top: 0;">Notifikasi WhatsApp Pembayaran Lunas</h2>
+    <p class="sub">
+        Setiap pembayaran lisensi yang dinyatakan lunas otomatis
+        mengirim WhatsApp ke tenant (bukti terima + masa aktif baru),
+        memakai gateway MPWA platform. Nomor pengirimnya mengikuti
+        pengaturan pengingat perpanjangan:
+        <?= $mpwaSender !== null ? '<strong>' . e($mpwaSender) . '</strong>' : '<em>belum diatur — isi di kartu Otomasi Pengingat pada halaman Tenant &amp; Lisensi</em>' ?>.
+    </p>
+    <p class="hint" style="margin-bottom: 14px;">
+        Status API key:
+        <?php if ($mpwaApiKeyStored): ?>
+            <span class="status-on">Sudah tersimpan (terenkripsi)</span>
+        <?php else: ?>
+            <span class="status-off">Belum diatur — notifikasi nonaktif</span>
+        <?php endif; ?>
+    </p>
+    <form method="post" action="/admin/payments/mpwa">
+        <?= Auth::csrfField() ?>
+        <div class="field">
+            <label for="mpwa_api_key">API Key MPWA</label>
+            <input id="mpwa_api_key" name="mpwa_api_key" type="password" autocomplete="new-password"
+                   placeholder="<?= $mpwaApiKeyStored ? 'Isi hanya bila ingin mengganti' : 'Tempel API key dari Pengaturan akun MPWA' ?>">
+            <p class="hint">Sama seperti API key yang dipakai workflow n8n; ambil dari halaman Pengaturan akun di panel MPWA. Disimpan terenkripsi dan tidak ditampilkan lagi.</p>
+        </div>
+        <button class="btn btn-primary" type="submit">Simpan API Key</button>
+    </form>
 </div>
 
 <div class="panel-box">
