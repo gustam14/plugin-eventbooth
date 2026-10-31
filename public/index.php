@@ -18,6 +18,7 @@ declare(strict_types=1);
  *   CRUD /tenant/events & /tenant/packages (tenant)           (M5a)
  *   GET  /e/{slug} & /s/{kode} -> album publik                (M5a)
  *   GET  /api/app/events, POST /api/app/sessions              (M5a)
+ *   POST /api/drive/session-folders|init-upload|complete      (M5b)
  *   GET|POST /account/password -> ganti kata sandi            (M2.1)
  *   GET  /admin/drive + OAuth Google Drive pusat              (M3)
  *   GET  /auth/google/callback -> callback OAuth Google       (M3)
@@ -30,8 +31,8 @@ declare(strict_types=1);
  *   GET|POST /api/automation/* -> pengingat perpanjangan n8n   (M4)
  *
  * Grup API lain di bawah masih STUB 501 bertanda TODO; logika
- * bisnisnya (lisensi, Midtrans, Drive, sesi) dibangun bertahap
- * sesuai roadmap di README.md dan blueprint v4.
+ * bisnisnya (Midtrans, registrasi sesi via n8n, berbagi WA)
+ * dibangun bertahap sesuai roadmap di README.md dan blueprint v4.
  */
 
 require dirname(__DIR__) . '/app/bootstrap.php';
@@ -583,8 +584,8 @@ $router->post('/admin/plans/{id}/toggle', static function (array $params): void 
  * google_accounts. Token TIDAK PERNAH ditampilkan, dicatat ke log,
  * atau dimasukkan ke pesan flash.
  *
- * Endpoint /api/drive/* untuk n8n/aplikasi tetap stub 501 —
- * dibangun pada milestone berikutnya.
+ * Endpoint operasi /api/drive/* untuk aplikasi booth hidup
+ * sejak M5b (lihat bagian "API — operasi Google Drive" di bawah).
  * ------------------------------------------------------------------- */
 
 /**
@@ -3132,6 +3133,357 @@ $router->post('/api/app/sessions', static function () use ($appDeviceContext, $r
 });
 
 /* ---------------------------------------------------------------------
+ * API — operasi Google Drive untuk aplikasi booth (Milestone 5b).
+ *
+ * Byte foto TIDAK PERNAH lewat server ini (blueprint §2): server
+ * hanya menyiapkan folder, menerbitkan URL sesi resumable upload
+ * (aplikasi PUT byte-nya langsung ke Google), dan mencatat
+ * metadata sesudah unggahan selesai. Refresh token tetap
+ * terenkripsi di server; access token hanya hidup selama satu
+ * request dan tidak pernah masuk respons apa pun.
+ *
+ * Penjaga: token perangkat Bearer yang sama seperti /api/app/*
+ * ($appDeviceContext) — hanya aplikasi PC yang memanggil
+ * endpoint ini; n8n mengorkestrasi lewat aplikasi, BUKAN lewat
+ * endpoint Drive ini. Sesi wajib milik tenant perangkat (selain
+ * itu 404 not_found). Semua operasi memakai akun google_accounts
+ * yang terkunci pada event sesi itu (events.drive_account_id):
+ * event tanpa akun / akun terputus menjawab 503
+ * drive_not_configured; kegagalan di sisi Google menjawab 502
+ * drive_error.
+ * ------------------------------------------------------------------- */
+
+/** Batasi string dari body JSON: trim + potong maksimum; null bila kosong/bukan string. */
+$driveCap = static function (mixed $value, int $max): ?string {
+    if (!is_string($value)) {
+        return null;
+    }
+    $value = trim($value);
+    if ($value === '') {
+        return null;
+    }
+
+    return function_exists('mb_substr')
+        ? mb_substr($value, 0, $max, 'UTF-8')
+        : substr($value, 0, $max);
+};
+
+/** Jenis media yang sah (enum media_files.kind pada skema). */
+$driveKinds = ['final', 'original', 'gif', 'video', 'thumb'];
+
+/** Folder tujuan per jenis media: final & original punya subfolder khusus, sisanya di folder sesi. */
+$driveFolderForKind = static function (array $folders, string $kind): string {
+    return match ($kind) {
+        'final' => $folders['final'],
+        'original' => $folders['originals'],
+        default => $folders['session'],
+    };
+};
+
+/**
+ * Konteks operasi Drive: dari konteks perangkat + session_id pada
+ * body, turunkan [pdo, device, license, tenant, session, account,
+ * accessToken]. Session memuat kolom event hasil
+ * Album::sessionWithEvent. Kegagalan diakhiri error JSON berkode
+ * stabil: invalid_request 422, not_found 404,
+ * drive_not_configured 503, drive_error 502, server_error 503.
+ *
+ * @param array<string, mixed> $body Body JSON hasil $readJsonBody.
+ * @return array{0: PDO, 1: array<string, mixed>, 2: array<string, mixed>,
+ *               3: array<string, mixed>, 4: array<string, mixed>,
+ *               5: array<string, mixed>, 6: string}
+ */
+$driveContext = static function (array $body) use ($appDeviceContext, $googleCredentials): array {
+    [$pdo, $device, $license, $tenant] = $appDeviceContext();
+
+    $sessionId = isset($body['session_id']) && is_numeric($body['session_id'])
+        ? (int) $body['session_id']
+        : 0;
+    if ($sessionId <= 0) {
+        Json::error('session_id wajib diisi.', 422, 'invalid_request');
+    }
+
+    $session = null;
+    $account = null;
+    try {
+        $session = Album::sessionWithEvent($pdo, $sessionId);
+        if ($session === null || (int) $session['event_tenant_id'] !== (int) $tenant['id']) {
+            Json::error('Sesi tidak ditemukan.', 404, 'not_found');
+        }
+
+        $accountId = $session['event_drive_account_id'] ?? null;
+        if ($accountId === null) {
+            Json::error(
+                'Event ini belum memiliki akun penyimpanan. Minta admin menugaskan akun Drive pada event ini.',
+                503,
+                'drive_not_configured'
+            );
+        }
+
+        $account = GoogleAccount::find($pdo, (int) $accountId);
+        if ($account === null || (string) ($account['status'] ?? '') !== 'connected') {
+            Json::error(
+                'Akun penyimpanan event ini sedang tidak terhubung. Minta admin memeriksa menu Google Drive.',
+                503,
+                'drive_not_configured'
+            );
+        }
+
+        License::touchLastSeen($pdo, (int) $license['id']);
+    } catch (PDOException) {
+        Json::error('Layanan belum siap. Silakan coba lagi.', 503, 'server_error');
+    }
+
+    // Kredensial OAuth + refresh token didekripsi hanya di sini,
+    // di dalam server — tidak pernah keluar dalam respons apa pun.
+    $creds = $googleCredentials($pdo);
+    $clientSecret = $creds['secret_cipher'] !== null ? Crypto::decrypt($creds['secret_cipher']) : null;
+    $refreshToken = Crypto::decrypt((string) ($account['refresh_token_encrypted'] ?? ''));
+    if ($creds['client_id'] === '' || $clientSecret === null || $refreshToken === null || $refreshToken === '') {
+        Json::error('Kredensial Google Drive belum lengkap di server.', 503, 'drive_not_configured');
+    }
+
+    try {
+        $accessToken = GoogleDrive::accessTokenOrFail($creds['client_id'], $clientSecret, $refreshToken);
+    } catch (GoogleDriveException) {
+        // Pola yang sama seperti tes koneksi M3: token ditolak
+        // Google -> tandai akun 'error' agar terlihat Super Admin.
+        try {
+            GoogleAccount::setStatus($pdo, (int) $account['id'], 'error');
+        } catch (PDOException) {
+            // Penandaan status bersifat tambahan; abaikan kegagalannya.
+        }
+        Json::error('Koneksi ke Google Drive gagal. Silakan coba lagi.', 502, 'drive_error');
+    }
+
+    return [$pdo, $device, $license, $tenant, $session, $account, $accessToken];
+};
+
+/**
+ * Pastikan rantai folder "Plugin Eventbooth/{NamaTenant}/
+ * {NamaEvent}/{KodeSesi}" + subfolder `final` dan `originals`
+ * ada pada akun Drive event, lalu kembalikan peta ID-nya.
+ * Folder root memakai google_accounts.root_folder_id; bila
+ * kosong (akun tertaut sebelum folder root sempat dibuat),
+ * folder root dibuat sekarang dan ID-nya disimpan kembali.
+ * ID folder sesi disimpan ke sessions.drive_folder_id secara
+ * best-effort (folder tetap ditemukan lewat nama pada panggilan
+ * berikutnya; skema events memang tidak punya kolom folder).
+ *
+ * @param array<string, mixed> $tenant  Baris tenant pemilik sesi.
+ * @param array<string, mixed> $session Baris sesi + kolom event (Album::sessionWithEvent).
+ * @param array<string, mixed> $account Baris google_accounts penampung event.
+ * @return array{event: string, session: string, final: string, originals: string}
+ * @throws GoogleDriveException
+ */
+$ensureSessionFolders = static function (
+    PDO $pdo,
+    array $tenant,
+    array $session,
+    array $account,
+    string $accessToken
+): array {
+    $rootId = isset($account['root_folder_id']) && is_string($account['root_folder_id'])
+        && $account['root_folder_id'] !== ''
+        ? $account['root_folder_id']
+        : null;
+
+    if ($rootId === null) {
+        $rootId = GoogleDrive::ensureRootFolder($accessToken);
+        if ($rootId === null) {
+            throw new GoogleDriveException('Folder root "Plugin Eventbooth" tidak dapat disiapkan.');
+        }
+        try {
+            GoogleAccount::updateRootFolder($pdo, (int) $account['id'], $rootId);
+        } catch (PDOException) {
+            // Best-effort: folder root tetap ditemukan lewat pencarian nama.
+        }
+    }
+
+    $ids = GoogleDrive::ensureFolderPath($accessToken, $rootId, [
+        Tenant::displayName($tenant),
+        (string) $session['event_name'],
+        (string) $session['code'],
+    ]);
+    $sessionFolderId = $ids[2] ?? '';
+    if ($sessionFolderId === '') {
+        throw new GoogleDriveException('Folder sesi tidak dapat disiapkan.');
+    }
+
+    $finalId = GoogleDrive::ensureFolder($accessToken, 'final', $sessionFolderId);
+    $originalsId = GoogleDrive::ensureFolder($accessToken, 'originals', $sessionFolderId);
+
+    if (empty($session['drive_folder_id'])) {
+        try {
+            Album::saveSessionDriveFolder($pdo, (int) $session['id'], $sessionFolderId);
+        } catch (PDOException) {
+            // Best-effort: ID dicari lagi lewat nama pada panggilan berikutnya.
+        }
+    }
+
+    return [
+        'event' => $ids[1] ?? '',
+        'session' => $sessionFolderId,
+        'final' => $finalId,
+        'originals' => $originalsId,
+    ];
+};
+
+/**
+ * Siapkan seluruh folder sesi di Drive (dipanggil aplikasi
+ * sebelum mulai mengunggah foto sesi). Body: {session_id}.
+ * Balasan: {status: "ok", folders: {event, session, final,
+ * originals}} — ID folder Drive tiap tingkat.
+ */
+$router->post('/api/drive/session-folders', static function () use ($readJsonBody, $driveContext, $ensureSessionFolders): void {
+    $body = $readJsonBody();
+    [$pdo, $device, $license, $tenant, $session, $account, $accessToken] = $driveContext($body);
+
+    try {
+        $folders = $ensureSessionFolders($pdo, $tenant, $session, $account, $accessToken);
+    } catch (GoogleDriveException) {
+        Json::error('Folder Drive gagal disiapkan. Silakan coba lagi.', 502, 'drive_error');
+    }
+
+    Json::respond(['status' => 'ok', 'folders' => $folders]);
+});
+
+/**
+ * Inisiasi resumable upload satu file. Body: {session_id, kind,
+ * file_name, mime_type?, size_bytes?}. Server meminta URL sesi
+ * unggahan ke Google memakai token akun event; aplikasi lalu PUT
+ * byte file langsung ke upload_url itu (dengan header
+ * Content-Length sesuai ukuran file). Folder tujuan: final ->
+ * subfolder final, original -> originals, gif/video/thumb ->
+ * folder sesi.
+ * Balasan: {status: "ok", upload_url, folder_id}.
+ */
+$router->post('/api/drive/init-upload', static function () use ($readJsonBody, $driveContext, $ensureSessionFolders, $driveCap, $driveKinds, $driveFolderForKind): void {
+    $body = $readJsonBody();
+    [$pdo, $device, $license, $tenant, $session, $account, $accessToken] = $driveContext($body);
+
+    $kind = isset($body['kind']) && is_string($body['kind']) ? trim($body['kind']) : '';
+    if (!in_array($kind, $driveKinds, true)) {
+        Json::error('kind wajib salah satu dari: final, original, gif, video, thumb.', 422, 'invalid_request');
+    }
+
+    $fileName = $driveCap($body['file_name'] ?? null, 255);
+    if ($fileName === null) {
+        Json::error('file_name wajib diisi.', 422, 'invalid_request');
+    }
+
+    $mimeType = $driveCap($body['mime_type'] ?? null, 100) ?? 'application/octet-stream';
+
+    $sizeBytes = null;
+    if (isset($body['size_bytes']) && $body['size_bytes'] !== null && $body['size_bytes'] !== '') {
+        if (!is_numeric($body['size_bytes']) || (int) $body['size_bytes'] < 0) {
+            Json::error('size_bytes tidak sah.', 422, 'invalid_request');
+        }
+        $sizeBytes = (int) $body['size_bytes'];
+    }
+
+    $folders = [];
+    $folderId = '';
+    $uploadUrl = '';
+    try {
+        $folders = $ensureSessionFolders($pdo, $tenant, $session, $account, $accessToken);
+        $folderId = $driveFolderForKind($folders, $kind);
+        $uploadUrl = GoogleDrive::initResumableUpload($accessToken, $folderId, $fileName, $mimeType, $sizeBytes);
+    } catch (GoogleDriveException) {
+        Json::error('Inisiasi unggahan ke Google Drive gagal. Silakan coba lagi.', 502, 'drive_error');
+    }
+
+    Json::respond([
+        'status' => 'ok',
+        'upload_url' => $uploadUrl,
+        'folder_id' => $folderId,
+    ]);
+});
+
+/**
+ * Selesaikan satu unggahan: aplikasi memanggil ini SETELAH PUT
+ * byte ke upload_url selesai. Body: {session_id, kind, file_id,
+ * file_name?}. Server membaca metadata file dari Google, memberi
+ * izin lihat publik (anyone with link), dan mencatat baris
+ * media_files agar foto muncul di album publik.
+ * Balasan: {status: "ok", media: {id, web_link, thumbnail_link,
+ * download_url}}.
+ */
+$router->post('/api/drive/complete', static function () use ($readJsonBody, $driveContext, $ensureSessionFolders, $driveCap, $driveKinds, $driveFolderForKind): void {
+    $body = $readJsonBody();
+    [$pdo, $device, $license, $tenant, $session, $account, $accessToken] = $driveContext($body);
+
+    $kind = isset($body['kind']) && is_string($body['kind']) ? trim($body['kind']) : '';
+    if (!in_array($kind, $driveKinds, true)) {
+        Json::error('kind wajib salah satu dari: final, original, gif, video, thumb.', 422, 'invalid_request');
+    }
+
+    $fileId = isset($body['file_id']) && is_string($body['file_id']) ? trim($body['file_id']) : '';
+    if ($fileId === '') {
+        Json::error('file_id wajib diisi.', 422, 'invalid_request');
+    }
+
+    $fileNameInput = $driveCap($body['file_name'] ?? null, 255);
+
+    $metadata = null;
+    $folders = [];
+    try {
+        $metadata = GoogleDrive::fileMetadataOrFail($accessToken, $fileId);
+        GoogleDrive::shareAnyoneReaderOrFail($accessToken, $metadata['id']);
+        $folders = $ensureSessionFolders($pdo, $tenant, $session, $account, $accessToken);
+    } catch (GoogleDriveException) {
+        Json::error('Penyelesaian unggahan di Google Drive gagal. Silakan coba lagi.', 502, 'drive_error');
+    }
+
+    $media = null;
+    try {
+        $media = Album::registerMedia($pdo, [
+            'session_id' => (int) $session['id'],
+            'event_id' => (int) $session['event_id'],
+            'drive_account_id' => (int) $account['id'],
+            'drive_file_id' => $metadata['id'],
+            'drive_folder_id' => $driveFolderForKind($folders, $kind),
+            'kind' => $kind,
+            'file_name' => $fileNameInput ?? $metadata['name'],
+            'mime_type' => $metadata['mime_type'],
+            'size_bytes' => $metadata['size_bytes'],
+            'web_link' => $metadata['web_link'],
+            'thumbnail_link' => $metadata['thumbnail_link'],
+        ]);
+    } catch (PDOException) {
+        Json::error('Media gagal dicatat. Silakan coba lagi.', 503, 'server_error');
+    }
+
+    // Snapshot kuota akun digeser sebesar ukuran file ini
+    // (best-effort; angka otoritatif dibaca ulang dari Google
+    // saat tes koneksi/pengaitan ulang di dashboard Super Admin).
+    if ($metadata['size_bytes'] !== null && ($account['quota_used_bytes'] ?? null) !== null) {
+        try {
+            GoogleAccount::updateQuota(
+                $pdo,
+                (int) $account['id'],
+                ($account['quota_total_bytes'] ?? null) !== null
+                    ? (int) $account['quota_total_bytes']
+                    : null,
+                (int) $account['quota_used_bytes'] + (int) $metadata['size_bytes']
+            );
+        } catch (PDOException) {
+            // Best-effort: abaikan kegagalan pembaruan snapshot kuota.
+        }
+    }
+
+    Json::respond([
+        'status' => 'ok',
+        'media' => [
+            'id' => (int) ($media['id'] ?? 0),
+            'web_link' => $metadata['web_link'],
+            'thumbnail_link' => $metadata['thumbnail_link'],
+            'download_url' => Album::downloadUrl(['drive_file_id' => $metadata['id']]),
+        ],
+    ]);
+});
+
+/* ---------------------------------------------------------------------
  * API — stub grup berikutnya (TODO, belum ada logika bisnis)
  * ------------------------------------------------------------------- */
 $stub = static function (string $note): callable {
@@ -3150,12 +3502,11 @@ $router->post('/api/payment/create', $stub('Buat pembayaran tamu — Milestone 4
 $router->post('/api/payment/notification', $stub('Webhook notifikasi Midtrans — Milestone 4.'));
 $router->get('/api/payment/status', $stub('Polling status pembayaran — Milestone 4.'));
 
-// TODO(M5): Endpoint Drive untuk n8n/aplikasi (blueprint §2A & §3).
-// Manajemen koneksinya (OAuth, multi-akun, default) sudah hidup di
-// /admin/drive sejak M3; endpoint di bawah dipanggil n8n/aplikasi
-// dengan token workflow — token Drive tidak pernah keluar server ini.
-$router->post('/api/drive/folder', $stub('Buat folder Drive tenant/event/sesi — Milestone 5.'));
-$router->post('/api/drive/init-upload', $stub('Inisiasi resumable upload Drive — Milestone 5.'));
+// CATATAN(M5b): Endpoint operasi Drive (/api/drive/session-folders,
+// /api/drive/init-upload, /api/drive/complete) SUDAH HIDUP di bagian
+// "API — operasi Google Drive" di atas — manajemen koneksinya
+// (OAuth, multi-akun, default) hidup di /admin/drive sejak M3 dan
+// token Drive tidak pernah keluar server ini.
 
 // TODO(M5): Registrasi metadata sesi selesai upload & berbagi
 // WhatsApp lewat n8n/MPWA (blueprint §3 langkah 5 & §5C).

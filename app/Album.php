@@ -252,4 +252,91 @@ final class Album
 
         return $row === false ? [] : $row;
     }
+
+    /* -----------------------------------------------------------------
+     * Operasi Drive & registrasi media (API aplikasi, M5b)
+     * --------------------------------------------------------------- */
+
+    /**
+     * Sesi dari ID-nya + kolom event induk yang dibutuhkan jalur
+     * Drive: 'event_name', 'event_slug', 'event_tenant_id'
+     * (penjaga kepemilikan), dan 'event_drive_account_id' (akun
+     * Drive penampung event, terkunci sejak event dibuat).
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function sessionWithEvent(PDO $pdo, int $sessionId): ?array
+    {
+        $stmt = $pdo->prepare(
+            'SELECT s.*,
+                    e.name AS event_name,
+                    e.slug AS event_slug,
+                    e.tenant_id AS event_tenant_id,
+                    e.drive_account_id AS event_drive_account_id
+               FROM sessions s
+               JOIN events e ON e.id = s.event_id
+              WHERE s.id = :id
+              LIMIT 1'
+        );
+        $stmt->execute(['id' => $sessionId]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    /** Simpan ID folder sesi di Drive (kolom sessions.drive_folder_id). */
+    public static function saveSessionDriveFolder(PDO $pdo, int $sessionId, string $folderId): void
+    {
+        $stmt = $pdo->prepare(
+            'UPDATE sessions SET drive_folder_id = :folder WHERE id = :id'
+        );
+        $stmt->execute(['folder' => $folderId, 'id' => $sessionId]);
+    }
+
+    /**
+     * Catat satu file yang byte-nya SUDAH selesai diunggah aplikasi
+     * langsung ke Google Drive (POST /api/drive/complete). Server
+     * hanya menyimpan metadata + tautan; `event_id` dan
+     * `drive_account_id` didenormalisasi dari sesi/event agar album
+     * tetap bisa dirangkai walau akun penampung berganti.
+     *
+     * @param array{session_id: int, event_id: int, drive_account_id: ?int,
+     *              drive_file_id: string, drive_folder_id: ?string,
+     *              kind: string, file_name: ?string, mime_type: ?string,
+     *              size_bytes: ?int, web_link: ?string,
+     *              thumbnail_link: ?string} $data
+     * @return array<string, mixed> Baris media yang baru dicatat.
+     */
+    public static function registerMedia(PDO $pdo, array $data): array
+    {
+        $stmt = $pdo->prepare(
+            'INSERT INTO media_files
+                (session_id, event_id, drive_account_id, drive_file_id,
+                 drive_folder_id, kind, file_name, mime_type, size_bytes,
+                 web_link, thumbnail_link)
+             VALUES
+                (:session_id, :event_id, :drive_account_id, :drive_file_id,
+                 :drive_folder_id, :kind, :file_name, :mime_type, :size_bytes,
+                 :web_link, :thumbnail_link)'
+        );
+        $stmt->execute([
+            'session_id' => $data['session_id'],
+            'event_id' => $data['event_id'],
+            'drive_account_id' => $data['drive_account_id'],
+            'drive_file_id' => $data['drive_file_id'],
+            'drive_folder_id' => $data['drive_folder_id'],
+            'kind' => $data['kind'],
+            'file_name' => $data['file_name'],
+            'mime_type' => $data['mime_type'],
+            'size_bytes' => $data['size_bytes'],
+            'web_link' => $data['web_link'],
+            'thumbnail_link' => $data['thumbnail_link'],
+        ]);
+
+        $stmt = $pdo->prepare('SELECT * FROM media_files WHERE id = :id LIMIT 1');
+        $stmt->execute(['id' => (int) $pdo->lastInsertId()]);
+        $row = $stmt->fetch();
+
+        return $row === false ? [] : $row;
+    }
 }

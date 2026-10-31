@@ -346,10 +346,62 @@ aktifnya (`id`, `event_id`, `name`, `timer_mode`,
 berstatus `created` dengan kode unik 8 karakter pada event
 milik tenant perangkat itu sendiri (event tenant lain menjawab
 404 `not_found`) dan membalas `album_url`/`session_url`
-absolut. Endpoint Drive (`/api/drive/*`), registrasi media
-(`/api/session/register`), dan berbagi WhatsApp tetap stub
-501 — dikerjakan pada M5b. Tidak ada perubahan skema pada
-milestone ini.
+absolut. Endpoint Drive (`/api/drive/*`) dikerjakan pada
+M5b (lihat bagian berikutnya); registrasi media via n8n
+(`/api/session/register`) dan berbagi WhatsApp masih stub
+501. Tidak ada perubahan skema pada milestone ini.
+
+## Milestone 5b — Endpoint Operasi Google Drive (API)
+
+Tiga endpoint yang dipanggil **aplikasi booth di PC** agar foto
+mengalir PC → Google langsung; website hanya menangani JSON
+kecil dan token (blueprint §2). Otentikasi sama seperti
+`/api/app/*`: token perangkat (Bearer) dari login akun tenant —
+**hanya token perangkat**; n8n tidak memanggil endpoint ini,
+melainkan mengorkestrasi lewat aplikasi. Refresh token tidak
+pernah keluar server: rute menukarnya menjadi access token
+(segar per request) memakai kredensial OAuth dari M3, dan semua
+operasi memakai akun `google_accounts` yang **terkunci pada
+event** sesi itu (`events.drive_account_id`).
+
+- `POST /api/drive/session-folders` `{session_id}` — memastikan
+  rantai folder `Plugin Eventbooth/{NamaTenant}/{NamaEvent}/
+  {KodeSesi}` (di bawah folder root akun dari M3) plus
+  subfolder `final` dan `originals` ada, lalu membalas
+  `{status: "ok", folders: {event, session, final, originals}}`
+  berisi ID folder Drive. ID folder sesi disimpan di
+  `sessions.drive_folder_id`.
+- `POST /api/drive/init-upload` `{session_id, kind, file_name,
+  mime_type?, size_bytes?}` — `kind` salah satu dari enum
+  `media_files.kind` (`final`/`original`/`gif`/`video`/`thumb`);
+  folder tujuan: `final` → subfolder final, `original` →
+  originals, sisanya → folder sesi. Server menginisiasi
+  resumable upload ke Google dan membalas `{status: "ok",
+  upload_url, folder_id}`; aplikasi kemudian PUT byte file
+  **langsung ke `upload_url` itu** (byte tidak lewat server).
+- `POST /api/drive/complete` `{session_id, kind, file_id,
+  file_name?}` — dipanggil setelah PUT selesai: server membaca
+  metadata file dari Google, menetapkan izin *anyone with link*
+  (reader) agar album publik bisa membukanya, dan mencatat
+  baris `media_files` (termasuk `web_link`, `thumbnail_link`,
+  `drive_folder_id`, dan akun penampung). Balasan `{status:
+  "ok", media: {id, web_link, thumbnail_link, download_url}}`
+  dengan `download_url` diturunkan dari `drive_file_id` seperti
+  di halaman album. Snapshot `quota_used_bytes` akun digeser
+  sebesar ukuran file secara best-effort.
+
+Kode error mengikuti gaya `/api/app/*`: `invalid_token` 401,
+`invalid_request` 422, `not_found` 404 (termasuk sesi milik
+tenant lain), `server_not_configured`/`server_error` 503,
+ditambah **`drive_not_configured` 503** (event belum punya akun
+Drive atau akunnya terputus/belum lengkap kredensialnya) dan
+**`drive_error` 502** (Google menolak/gagal — token refresh
+yang ditolak juga menandai akun berstatus `error` seperti tes
+koneksi M3). Tidak ada perubahan skema pada milestone ini;
+`events` memang tidak memiliki kolom folder, jadi ID folder
+event tidak disimpan — folder ditemukan kembali lewat nama
+pada setiap panggilan (operasi cari-atau-buat bersifat
+idempoten).
 
 ## Roadmap milestone
 
@@ -381,9 +433,12 @@ milestone ini.
   dengan webhook notifikasi terverifikasi tanda tangan.
 - **M5 — Publik & sesi:** 5a selesai (event & paket tenant,
   album `/e/{slug}` dan `/s/{kode}`, `GET /api/app/events`,
-  `POST /api/app/sessions`). Sisa 5b: `/api/session/register`,
-  endpoint `/api/drive/*`, berbagi WhatsApp via n8n/MPWA,
-  integrasi workflow n8n "Plugin Eventbooth".
+  `POST /api/app/sessions`); 5b selesai (endpoint operasi
+  Drive `/api/drive/session-folders|init-upload|complete`
+  bertoken perangkat — folder sesi, resumable upload, dan
+  registrasi media). Sisa: `/api/session/register`, berbagi
+  WhatsApp via n8n/MPWA, integrasi workflow n8n
+  "Plugin Eventbooth".
 - **M6 — API aplikasi booth:** aktivasi lisensi, konfigurasi
   bertanda tangan, heartbeat hemat (blueprint §2).
 
