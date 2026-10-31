@@ -19,6 +19,8 @@ declare(strict_types=1);
  *   GET  /auth/google/callback -> callback OAuth Google       (M3)
  *   CRUD /admin/tenants + aksi lisensi /admin/licenses         (M4)
  *   POST /api/license/activate|validate -> API aplikasi booth  (M4)
+ *   POST /api/app/login|me|logout -> sesi aplikasi via akun     (M4c)
+ *   POST cabut perangkat: /tenant/licenses/... & /admin/...    (M4c)
  *   GET|POST /api/automation/* -> pengingat perpanjangan n8n   (M4)
  *
  * Grup API lain di bawah masih STUB 501 bertanda TODO; logika
@@ -1055,6 +1057,15 @@ $router->get('/admin/tenants/{id}', static function (array $params): void {
 
         $tenantUsers = Tenant::usersOf($pdo, $id);
         $licenses = License::forTenant($pdo, $id);
+        $devicesByLicense = [];
+        foreach ($licenses as $licenseRow) {
+            try {
+                $devicesByLicense[(int) $licenseRow['id']] =
+                    License::devicesFor($pdo, (int) $licenseRow['id']);
+            } catch (PDOException) {
+                $devicesByLicense[(int) $licenseRow['id']] = [];
+            }
+        }
         $activePlans = array_values(array_filter(
             Plan::all($pdo),
             static fn (array $plan): bool => (int) ($plan['is_active'] ?? 0) === 1
@@ -1076,6 +1087,7 @@ $router->get('/admin/tenants/{id}', static function (array $params): void {
         'tenant' => $tenant,
         'tenantUsers' => $tenantUsers,
         'licenses' => $licenses,
+        'devicesByLicense' => $devicesByLicense,
         'activePlans' => $activePlans,
         'newKey' => is_string($newKey) ? $newKey : null,
     ]);
@@ -1388,6 +1400,51 @@ $router->post('/admin/licenses/{id}/revoke', static function (array $params): vo
     redirect('/admin/tenants/' . $tenantId);
 });
 
+/**
+ * Cabut perangkat dari sebuah lisensi oleh Super Admin
+ * (Milestone 4c, untuk keperluan dukungan): slot langsung bebas
+ * dan token sesi perangkat itu mati.
+ */
+$router->post('/admin/licenses/{licenseId}/devices/{deviceId}/revoke', static function (array $params): void {
+    Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, perangkat belum dapat dicabut.');
+        redirect('/admin');
+    }
+
+    $licenseId = (int) ($params['licenseId'] ?? 0);
+    $deviceRowId = (int) ($params['deviceId'] ?? 0);
+
+    $license = License::find($pdo, $licenseId);
+    if ($license === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $tenantId = (int) $license['tenant_id'];
+
+    try {
+        $revoked = License::revokeDevice($pdo, $licenseId, $deviceRowId);
+    } catch (PDOException) {
+        Flash::error('Perangkat gagal dicabut. Pastikan migrasi Milestone 4c (database/migrations/2026-10-31-m4c-device-token.sql) sudah dijalankan.');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    if (!$revoked) {
+        Flash::error('Perangkat tidak ditemukan pada lisensi ini.');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    Flash::success('Perangkat dicabut dari lisensi ini — slot tersedia lagi.');
+    redirect('/admin/tenants/' . $tenantId);
+});
+
 /* ---------------------------------------------------------------------
  * Area Tenant (Milestone 2) — role tenant_admin & tenant_staff.
  * Semua query dibatasi tenant_id milik pengguna yang login.
@@ -1462,19 +1519,37 @@ $router->get('/tenant', static function (): void {
  * Lisensi milik tenant yang login (Milestone 4; kunci tampil penuh
  * sesuai keputusan pemilik v0.5.1). Query dibatasi tenant_id
  * pengguna — tenant tidak pernah melihat lisensi tenant lain.
+ *
+ * Sejak M4c halaman ini juga menandai lisensi yang sedang dipakai
+ * aplikasi (currentForTenant) dan memuat daftar perangkat tiap
+ * lisensi agar tenant bisa mencabut perangkatnya sendiri.
  */
 $router->get('/tenant/licenses', static function (): void {
     $user = Auth::requireRole('tenant_admin', 'tenant_staff');
 
     $licenses = [];
+    $currentLicenseId = null;
+    $devicesByLicense = [];
     $pdo = Database::pdo();
     $tenantId = $user['tenant_id'];
     if ($pdo !== null && $tenantId !== null) {
         try {
             $licenses = License::forTenant($pdo, (int) $tenantId);
+            $current = License::currentForTenant($pdo, (int) $tenantId);
+            $currentLicenseId = $current !== null ? (int) $current['id'] : null;
+            foreach ($licenses as $licenseRow) {
+                try {
+                    $devicesByLicense[(int) $licenseRow['id']] =
+                        License::devicesFor($pdo, (int) $licenseRow['id']);
+                } catch (PDOException) {
+                    $devicesByLicense[(int) $licenseRow['id']] = [];
+                }
+            }
         } catch (PDOException) {
             // Halaman tetap tampil dengan keadaan kosong.
             $licenses = [];
+            $currentLicenseId = null;
+            $devicesByLicense = [];
         }
     }
 
@@ -1483,7 +1558,54 @@ $router->get('/tenant/licenses', static function (): void {
         'user' => $user,
         'flashes' => Flash::pull(),
         'licenses' => $licenses,
+        'currentLicenseId' => $currentLicenseId,
+        'devicesByLicense' => $devicesByLicense,
     ]);
+});
+
+/**
+ * Cabut perangkat dari dashboard tenant (Milestone 4c): slot
+ * perangkat lisensi langsung bebas lagi. Lisensi WAJIB milik
+ * tenant pengguna yang login dan perangkat wajib milik lisensi
+ * itu — keduanya diverifikasi sebelum pencabutan.
+ */
+$router->post('/tenant/licenses/{licenseId}/devices/{deviceId}/revoke', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, perangkat belum dapat dicabut.');
+        redirect('/tenant/licenses');
+    }
+
+    $licenseId = (int) ($params['licenseId'] ?? 0);
+    $deviceRowId = (int) ($params['deviceId'] ?? 0);
+    $tenantId = $user['tenant_id'];
+
+    try {
+        $license = License::find($pdo, $licenseId);
+        if ($license === null || $tenantId === null || (int) $license['tenant_id'] !== (int) $tenantId) {
+            View::render('errors/404', [
+                'appName' => Config::appName(),
+                'appUrl' => Config::appUrl(),
+            ], 404);
+            return;
+        }
+
+        $revoked = License::revokeDevice($pdo, $licenseId, $deviceRowId);
+    } catch (PDOException) {
+        Flash::error('Perangkat gagal dicabut. Pastikan migrasi Milestone 4c (database/migrations/2026-10-31-m4c-device-token.sql) sudah dijalankan.');
+        redirect('/tenant/licenses');
+    }
+
+    if (!$revoked) {
+        Flash::error('Perangkat tidak ditemukan pada lisensi ini.');
+        redirect('/tenant/licenses');
+    }
+
+    Flash::success('Perangkat dicabut — slot tersedia lagi.');
+    redirect('/tenant/licenses');
 });
 
 /* ---------------------------------------------------------------------
@@ -1848,6 +1970,264 @@ $router->post('/api/license/validate', static function () use ($readJsonBody, $l
     }
 
     Json::respond($licenseApiPayload($license, $ctx['plan']));
+});
+
+/* ---------------------------------------------------------------------
+ * API — sesi aplikasi booth berbasis AKUN (Milestone 4c,
+ * keputusan pemilik: aktivasi melekat akun, meniru DSLRBooth).
+ *
+ * Aplikasi masuk dengan email + kata sandi akun tenant dan
+ * otomatis memakai lisensi aktif dengan masa berlaku terpanjang
+ * milik tenant itu (License::currentForTenant) — tanpa mengetik
+ * kunci. Login menerbitkan token sesi perangkat
+ * (Authorization: Bearer); server hanya menyimpan hash SHA-256
+ * token di license_devices.access_token_hash (migrasi M4c).
+ * Jalur kunci /api/license/* tetap hidup sebagai cadangan.
+ *
+ * Sebelum migrasi M4c dijalankan, kolom token belum ada dan
+ * endpoint-endpoint ini menjawab 503 {error: "server_error"}
+ * lewat tangkapan PDOException yang terarah — endpoint kunci
+ * tidak ikut terpengaruh karena tidak menyentuh kolom itu.
+ * ------------------------------------------------------------------- */
+
+/** Ambil token dari header "Authorization: Bearer <token>". */
+$bearerToken = static function (): ?string {
+    $header = $_SERVER['HTTP_AUTHORIZATION']
+        ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+        ?? '';
+    if (is_string($header) && preg_match('/^Bearer\s+(.+)$/i', trim($header), $matches) === 1) {
+        $token = trim($matches[1]);
+        return $token !== '' ? $token : null;
+    }
+
+    return null;
+};
+
+$router->post('/api/app/login', static function () use ($readJsonBody, $licenseApiPayload): void {
+    if (!Crypto::isConfigured()) {
+        Json::error('Server belum dikonfigurasi (APP_KEY belum diatur).', 503, 'server_not_configured');
+    }
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Json::error('Server belum dikonfigurasi.', 503, 'server_not_configured');
+    }
+
+    $body = $readJsonBody();
+    $email = isset($body['email']) && is_string($body['email']) ? trim($body['email']) : '';
+    $password = isset($body['password']) && is_string($body['password']) ? $body['password'] : '';
+    $deviceId = isset($body['device_id']) && is_string($body['device_id']) ? trim($body['device_id']) : '';
+
+    if ($email === '' || $password === '' || $deviceId === '') {
+        Json::error('email, password, dan device_id wajib diisi.', 422, 'invalid_request');
+    }
+
+    $cap = static function (mixed $value, int $max): ?string {
+        if (!is_string($value)) {
+            return null;
+        }
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+        return function_exists('mb_substr')
+            ? mb_substr($value, 0, $max, 'UTF-8')
+            : substr($value, 0, $max);
+    };
+    $deviceName = $cap($body['device_name'] ?? null, 120);
+    $appVersion = $cap($body['app_version'] ?? null, 32);
+
+    try {
+        $stmt = $pdo->prepare(
+            'SELECT id, tenant_id, name, email, password_hash, role, is_active
+               FROM users
+              WHERE email = :email
+              LIMIT 1'
+        );
+        $stmt->execute(['email' => $email]);
+        $account = $stmt->fetch();
+    } catch (PDOException) {
+        Json::error('Login gagal diproses. Silakan coba lagi.', 503, 'server_error');
+    }
+
+    // Pola yang sama seperti Auth::attempt: email tak dikenal tetap
+    // menjalankan password_verify terhadap hash boneka agar waktu
+    // respons tidak membocorkan email yang terdaftar. Semua
+    // kegagalan kredensial menjawab pesan generik yang sama.
+    $dummyHash = '$2y$10$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuvwxyzabcde';
+    if ($account === false) {
+        password_verify($password, $dummyHash);
+        Json::error('Email atau kata sandi salah.', 401, 'invalid_credentials');
+    }
+    if (!password_verify($password, (string) $account['password_hash'])) {
+        Json::error('Email atau kata sandi salah.', 401, 'invalid_credentials');
+    }
+    if (
+        !in_array((string) $account['role'], ['tenant_admin', 'tenant_staff'], true)
+        || (int) $account['is_active'] !== 1
+        || $account['tenant_id'] === null
+    ) {
+        Json::error('Email atau kata sandi salah.', 401, 'invalid_credentials');
+    }
+
+    $tenant = null;
+    $license = null;
+    $plan = null;
+    $deviceToken = null;
+
+    try {
+        $tenant = Tenant::find($pdo, (int) $account['tenant_id']);
+        if ($tenant === null || (string) ($tenant['status'] ?? 'active') !== 'active') {
+            Json::error('Akun tenant sedang dinonaktifkan. Hubungi EventBooth.', 403, 'tenant_inactive');
+        }
+
+        // Lisensi yang dipakai = lisensi aktif akun ini; kedaluwarsa
+        // dan ketiadaan lisensi sama-sama bermuara di sini karena
+        // lisensi kedaluwarsa tidak berstatus efektif aktif.
+        $license = License::currentForTenant($pdo, (int) $tenant['id']);
+        if ($license === null) {
+            Json::error(
+                'Akun ini belum memiliki lisensi aktif. Periksa dashboard Anda atau hubungi EventBooth.',
+                403,
+                'no_active_license'
+            );
+        }
+
+        $plan = Plan::find($pdo, (int) $license['plan_id']);
+        $licenseId = (int) $license['id'];
+        $deviceHash = hash('sha256', $deviceId);
+
+        // Penegakan slot per lisensi — pola yang sama seperti
+        // aktivasi kunci: perangkat baru ditolak bila kuota penuh.
+        $device = License::findDevice($pdo, $licenseId, $deviceHash);
+        $isNew = $device === null || (int) ($device['is_active'] ?? 0) !== 1;
+        if ($isNew) {
+            $ent = License::entitlements($license, $plan);
+            $maxDevices = $ent['max_devices'];
+            if ($maxDevices > 0 && License::deviceCount($pdo, $licenseId) >= $maxDevices) {
+                Json::error(
+                    'Batas perangkat plan (' . $maxDevices . ') sudah tercapai. Cabut perangkat lama dari dashboard Lisensi Saya, atau naikkan plan.',
+                    409,
+                    'device_limit'
+                );
+            }
+        }
+
+        License::registerDevice($pdo, $licenseId, $deviceHash, $deviceName, $appVersion);
+        License::markActivated($pdo, $licenseId);
+        License::touchLastSeen($pdo, $licenseId);
+
+        $device = License::findDevice($pdo, $licenseId, $deviceHash);
+        if ($device === null) {
+            Json::error('Login gagal diproses. Silakan coba lagi.', 503, 'server_error');
+        }
+
+        // Baris ini yang menyentuh kolom migrasi M4c.
+        $deviceToken = License::issueDeviceToken($pdo, (int) $device['id']);
+    } catch (PDOException) {
+        Json::error('Login gagal diproses. Silakan coba lagi.', 503, 'server_error');
+    }
+
+    $payload = $licenseApiPayload($license, $plan);
+    $payload['device_token'] = $deviceToken;
+    $payload['license_key'] = isset($license['license_key']) && is_string($license['license_key']) && $license['license_key'] !== ''
+        ? $license['license_key']
+        : null;
+    $payload['tenant'] = ['vendor_name' => Tenant::displayName($tenant)];
+
+    Json::respond($payload);
+});
+
+$router->post('/api/app/me', static function () use ($bearerToken, $licenseApiPayload): void {
+    if (!Crypto::isConfigured()) {
+        Json::error('Server belum dikonfigurasi (APP_KEY belum diatur).', 503, 'server_not_configured');
+    }
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Json::error('Server belum dikonfigurasi.', 503, 'server_not_configured');
+    }
+
+    $token = $bearerToken();
+    if ($token === null) {
+        Json::error('Token perangkat tidak sah.', 401, 'invalid_token');
+    }
+
+    $license = null;
+    $tenant = null;
+    $plan = null;
+
+    try {
+        $device = License::findDeviceByToken($pdo, $token);
+        if ($device === null) {
+            // Token tidak dikenal — termasuk sesudah perangkat
+            // dicabut tenant dari dashboardnya.
+            Json::error('Token perangkat tidak sah.', 401, 'invalid_token');
+        }
+
+        $license = License::find($pdo, (int) $device['license_id']);
+        if ($license === null) {
+            Json::error('Token perangkat tidak sah.', 401, 'invalid_token');
+        }
+
+        $tenant = Tenant::find($pdo, (int) $license['tenant_id']);
+        $plan = Plan::find($pdo, (int) $license['plan_id']);
+
+        License::touchDevice($pdo, (int) $device['id'], null, null);
+        License::touchLastSeen($pdo, (int) $license['id']);
+    } catch (PDOException) {
+        Json::error('Layanan belum siap. Silakan coba lagi.', 503, 'server_error');
+    }
+
+    // Status harus jujur: aplikasi mengunci diri dengan alasan ini
+    // bila lisensinya tidak lagi aktif. Urutan mengikuti gerbang
+    // API kunci: dicabut, ditangguhkan, tenant nonaktif, kedaluwarsa.
+    $storedStatus = (string) ($license['status'] ?? '');
+    if ($storedStatus === 'revoked') {
+        $licenseStatus = 'revoked';
+    } elseif ($storedStatus === 'suspended') {
+        $licenseStatus = 'suspended';
+    } elseif ($tenant === null || (string) ($tenant['status'] ?? 'active') !== 'active') {
+        $licenseStatus = 'tenant_inactive';
+    } elseif (License::effectiveStatus($license) === 'expired') {
+        $licenseStatus = 'expired';
+    } elseif (License::effectiveStatus($license) === 'active') {
+        $licenseStatus = 'active';
+    } else {
+        $licenseStatus = 'suspended';
+    }
+
+    $payload = $licenseApiPayload($license, $plan);
+    $payload['license_status'] = $licenseStatus;
+
+    Json::respond($payload);
+});
+
+$router->post('/api/app/logout', static function () use ($bearerToken): void {
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Json::error('Server belum dikonfigurasi.', 503, 'server_not_configured');
+    }
+
+    $token = $bearerToken();
+    if ($token === null) {
+        Json::error('Token perangkat tidak sah.', 401, 'invalid_token');
+    }
+
+    try {
+        $device = License::findDeviceByToken($pdo, $token);
+        if ($device === null) {
+            Json::error('Token perangkat tidak sah.', 401, 'invalid_token');
+        }
+
+        // Nonaktifkan baris perangkat: slot langsung bebas dipakai
+        // perangkat lain dan token ini tidak berlaku lagi.
+        License::deactivateDevice($pdo, (int) $device['id']);
+    } catch (PDOException) {
+        Json::error('Logout gagal diproses. Silakan coba lagi.', 503, 'server_error');
+    }
+
+    Json::respond(['status' => 'ok']);
 });
 
 /* ---------------------------------------------------------------------

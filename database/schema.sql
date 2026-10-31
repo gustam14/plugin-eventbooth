@@ -145,6 +145,7 @@ CREATE TABLE license_devices (
     id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     license_id        BIGINT UNSIGNED NOT NULL,
     device_id_hash    CHAR(64) NOT NULL COMMENT 'Hash identitas hardware PC booth',
+    access_token_hash CHAR(64) NULL COMMENT 'Hash SHA-256 token sesi perangkat aplikasi booth (M4c); token mentah hanya di aplikasi',
     device_label      VARCHAR(120) NULL,
     app_version       VARCHAR(32) NULL,
     dslrbooth_version VARCHAR(32) NULL,
@@ -155,6 +156,7 @@ CREATE TABLE license_devices (
     updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uq_license_devices (license_id, device_id_hash),
+    KEY idx_license_devices_token (access_token_hash),
     CONSTRAINT fk_license_devices_license FOREIGN KEY (license_id) REFERENCES licenses (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

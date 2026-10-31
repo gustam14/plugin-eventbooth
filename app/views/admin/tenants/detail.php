@@ -9,6 +9,7 @@
  * @var array<string, mixed> $tenant Baris tenant.
  * @var array<int, array<string, mixed>> $tenantUsers Baris users milik tenant.
  * @var array<int, array<string, mixed>> $licenses Baris licenses + plan_name & device_count.
+ * @var array<int, array<int, array<string, mixed>>> $devicesByLicense Baris perangkat per ID lisensi (M4c).
  * @var array<int, array<string, mixed>> $activePlans Plan aktif untuk formulir penerbitan.
  * @var string|null $newKey Kunci lisensi yang BARU diterbitkan (tampil satu kali).
  */
@@ -252,6 +253,52 @@ $roleLabel = static function (string $role): string {
             </tbody>
         </table>
         </div>
+
+        <?php foreach ($licenses as $license): ?>
+            <?php
+            $devices = $devicesByLicense[(int) $license['id']] ?? [];
+            if ($devices === []) {
+                continue;
+            }
+            $ent = License::entitlements($license);
+            ?>
+            <div style="margin-top: 20px;">
+                <h3 style="font-size: 14.5px; font-weight: 700; margin-bottom: 8px;">
+                    Perangkat terhubung — <?= e((string) ($license['plan_name'] ?? $ent['plan_name'])) ?>
+                    <span class="hint" style="font-weight: 400;">(<?= e(License::maskedKey($license)) ?>)</span>
+                </h3>
+                <ul style="margin: 0; padding-left: 18px;">
+                    <?php foreach ($devices as $device): ?>
+                        <?php
+                        $deviceRowId = (int) $device['id'];
+                        $deviceLabel = trim((string) ($device['device_label'] ?? ''));
+                        $deviceActive = (int) ($device['is_active'] ?? 0) === 1;
+                        $firstSeen = License::formatDateId((string) ($device['first_seen_at'] ?? ''));
+                        $lastActive = License::formatDateId((string) ($device['last_heartbeat_at'] ?? $device['first_seen_at'] ?? ''));
+                        ?>
+                        <li style="margin-bottom: 8px;">
+                            <strong><?= e($deviceLabel !== '' ? $deviceLabel : 'Perangkat') ?></strong>
+                            <?php if ($deviceActive): ?>
+                                <span class="status-on" style="margin-left: 6px;">Aktif</span>
+                            <?php else: ?>
+                                <span class="status-off" style="margin-left: 6px;">Dicabut</span>
+                            <?php endif; ?>
+                            <br>
+                            <span class="hint">Pertama terhubung: <?= e($firstSeen) ?> · Terakhir aktif: <?= e($lastActive) ?></span>
+                            <?php if ($deviceActive): ?>
+                                <form method="post"
+                                      action="/admin/licenses/<?= (int) $license['id'] ?>/devices/<?= $deviceRowId ?>/revoke"
+                                      onsubmit="return confirm('Cabut perangkat ini dari lisensi? Slot perangkat akan bebas dan aplikasi di perangkat itu terkunci sampai masuk lagi.');"
+                                      style="display: inline-block; margin-left: 8px;">
+                                    <?= Auth::csrfField() ?>
+                                    <button class="btn btn-small btn-danger" type="submit">Cabut</button>
+                                </form>
+                            <?php endif; ?>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+        <?php endforeach; ?>
     <?php endif; ?>
 </div>
 <?php require BASE_PATH . '/app/views/partials/dashboard_bottom.php'; ?>

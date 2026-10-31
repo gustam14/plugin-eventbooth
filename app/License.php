@@ -26,6 +26,12 @@ declare(strict_types=1);
  *     "expired" juga dihitung dinamis dari expires_at agar lisensi
  *     yang lewat tanggalnya langsung tidak berlaku walau barisnya
  *     belum diperbarui.
+ *   - Aktivasi melekat akun (v0.6.0): aplikasi booth bisa masuk
+ *     dengan akun tenant (/api/app/login) dan otomatis memakai
+ *     lisensi dari currentForTenant(); sesi perangkat dijaga token
+ *     acak yang hash-nya disimpan di license_devices.access_token_hash
+ *     (migrasi M4c). Jalur kunci (activate/validate) tetap hidup
+ *     sebagai cadangan.
  */
 final class License
 {
@@ -124,6 +130,56 @@ final class License
         $rows = $stmt->fetchAll();
 
         return is_array($rows) ? $rows : [];
+    }
+
+    /**
+     * Lisensi yang DIPAKAI aplikasi booth saat masuk dengan akun
+     * tenant (aktivasi melekat akun, v0.6.0 — meniru DSLRBooth):
+     * di antara lisensi tenant yang status efektifnya 'active'
+     * (tersimpan active dan belum kedaluwarsa), pilih yang
+     * expires_at-nya paling jauh; expires_at NULL (tanpa
+     * kedaluwarsa) dianggap paling besar; seri dipecahkan oleh
+     * lisensi yang paling baru dibuat. Null bila tidak ada.
+     *
+     * @return array<string, mixed>|null Baris lisensi (+ plan_name & device_count).
+     */
+    public static function currentForTenant(PDO $pdo, int $tenantId): ?array
+    {
+        $active = [];
+        foreach (self::forTenant($pdo, $tenantId) as $license) {
+            if (self::effectiveStatus($license) === 'active') {
+                $active[] = $license;
+            }
+        }
+        if ($active === []) {
+            return null;
+        }
+
+        usort($active, static function (array $a, array $b): int {
+            $expiresA = $a['expires_at'] ?? null;
+            $expiresB = $b['expires_at'] ?? null;
+
+            // NULL (tanpa kedaluwarsa) = masa berlaku terbesar.
+            if ($expiresA === null && $expiresB === null) {
+                return (int) $b['id'] <=> (int) $a['id'];
+            }
+            if ($expiresA === null) {
+                return -1;
+            }
+            if ($expiresB === null) {
+                return 1;
+            }
+
+            $byExpiry = (int) strtotime((string) $expiresB) <=> (int) strtotime((string) $expiresA);
+            if ($byExpiry !== 0) {
+                return $byExpiry;
+            }
+
+            // Seri: yang paling baru dibuat menang.
+            return (int) $b['id'] <=> (int) $a['id'];
+        });
+
+        return $active[0];
     }
 
     /**
@@ -490,6 +546,97 @@ final class License
             'app_version' => $appVersion,
             'id' => $deviceId,
         ]);
+    }
+
+    /**
+     * Semua baris perangkat milik satu lisensi, terbaru dulu —
+     * untuk daftar "Perangkat Terhubung" di dashboard.
+     * Kolom yang dibaca sengaja TIDAK memuat access_token_hash,
+     * jadi daftar ini tetap bisa tampil sebelum migrasi M4c.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function devicesFor(PDO $pdo, int $licenseId): array
+    {
+        $stmt = $pdo->prepare(
+            'SELECT id, device_label, is_active, first_seen_at, last_heartbeat_at
+               FROM license_devices
+              WHERE license_id = :license_id
+              ORDER BY id DESC'
+        );
+        $stmt->execute(['license_id' => $licenseId]);
+        $rows = $stmt->fetchAll();
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    /**
+     * Cabut satu perangkat dari lisensi (dari dashboard tenant atau
+     * Super Admin): baris dinonaktifkan dan token sesinya dihapus,
+     * sehingga slot perangkat langsung bebas dan token lama mati.
+     * Mengembalikan true bila ada baris yang berubah.
+     *
+     * Memakai kolom access_token_hash (migrasi M4c) — sebelum
+     * migrasi, pemanggil menangkap PDOException-nya.
+     */
+    public static function revokeDevice(PDO $pdo, int $licenseId, int $deviceId): bool
+    {
+        $stmt = $pdo->prepare(
+            'UPDATE license_devices
+                SET is_active = 0, access_token_hash = NULL
+              WHERE id = :id AND license_id = :license_id'
+        );
+        $stmt->execute(['id' => $deviceId, 'license_id' => $licenseId]);
+
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Terbitkan token sesi perangkat untuk /api/app/login.
+     * Token mentah (64 heksadesimal) hanya dikembalikan ke aplikasi
+     * SATU KALI lewat respons login; server hanya menyimpan hash
+     * SHA-256-nya di access_token_hash (migrasi M4c).
+     */
+    public static function issueDeviceToken(PDO $pdo, int $deviceRowId): string
+    {
+        $token = bin2hex(random_bytes(32));
+
+        $stmt = $pdo->prepare(
+            'UPDATE license_devices SET access_token_hash = :hash WHERE id = :id'
+        );
+        $stmt->execute(['hash' => hash('sha256', $token), 'id' => $deviceRowId]);
+
+        return $token;
+    }
+
+    /**
+     * Cari baris perangkat AKTIF dari token sesi mentahnya
+     * (header Authorization: Bearer pada /api/app/*).
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function findDeviceByToken(PDO $pdo, string $rawToken): ?array
+    {
+        $stmt = $pdo->prepare(
+            'SELECT * FROM license_devices
+              WHERE access_token_hash = :hash AND is_active = 1
+              LIMIT 1'
+        );
+        $stmt->execute(['hash' => hash('sha256', $rawToken)]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    /** Akhiri sesi perangkat (/api/app/logout): nonaktif + token dihapus. */
+    public static function deactivateDevice(PDO $pdo, int $deviceRowId): void
+    {
+        $stmt = $pdo->prepare(
+            'UPDATE license_devices
+                SET is_active = 0, access_token_hash = NULL
+              WHERE id = :id'
+        );
+        $stmt->execute(['id' => $deviceRowId]);
     }
 
     /**

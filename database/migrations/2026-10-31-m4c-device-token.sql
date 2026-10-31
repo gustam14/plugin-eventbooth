@@ -1,0 +1,31 @@
+-- =====================================================================
+-- Migrasi SATU KALI: Milestone 4c — token sesi perangkat aplikasi.
+-- Plugin Eventbooth, 31 Oktober 2026 (kode v0.6.0).
+--
+-- Latar: keputusan pemilik — aktivasi lisensi MELEKAT PADA AKUN
+-- tenant (meniru DSLRBooth). Aplikasi booth masuk dengan email +
+-- kata sandi akun tenant dan otomatis memakai lisensi aktif
+-- dengan masa berlaku terpanjang milik akun itu; tidak perlu
+-- mengetik kunci lisensi (kunci tetap ada sebagai jalur cadangan).
+-- Setiap login aplikasi menerbitkan token sesi perangkat; migrasi
+-- ini menambah kolom license_devices.access_token_hash untuk
+-- menyimpan HASH SHA-256 token itu (token mentahnya hanya pernah
+-- ada di aplikasi, tidak pernah disimpan server). Tenant dapat
+-- mencabut perangkat dari dashboard-nya (halaman Lisensi Saya)
+-- untuk membebaskan slot — pencabutan menonaktifkan baris
+-- perangkat dan menghapus hash token ini.
+--
+-- Cara pakai: buka phpMyAdmin, pilih database website ini, buka
+-- tab SQL, tempel SELURUH isi berkas ini, lalu klik Kirim.
+-- Jalankan hanya sekali, dan SETELAH migrasi Milestone 4
+-- (2026-10-31-m4-tenant-license.sql) serta migrasi kunci terlihat
+-- (2026-10-31-m4b-license-key-visible.sql). Menjalankan ulang
+-- akan gagal karena kolomnya sudah ada.
+--
+-- Sebelum migrasi ini dijalankan, endpoint /api/app/* menjawab
+-- 503 (server_error) dan tombol Cabut Perangkat di dashboard
+-- menampilkan pesan untuk menjalankan migrasi; endpoint kunci
+-- /api/license/* tidak terpengaruh.
+-- =====================================================================
+
+ALTER TABLE license_devices ADD COLUMN access_token_hash CHAR(64) NULL AFTER device_id_hash;

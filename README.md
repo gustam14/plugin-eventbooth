@@ -208,6 +208,34 @@ Lisensi yang diterbitkan sebelum migrasi kedua ini kuncinya tidak
 tersimpan dan tidak bisa dimunculkan — cabut & terbitkan ulang
 bila kuncinya diperlukan.
 
+**Aktivasi melekat akun (v0.6.0) — meniru DSLRBooth:** aplikasi
+booth tidak lagi wajib mengetik kunci. `POST /api/app/login`
+(body JSON `email`, `password`, `device_id`, opsional
+`device_name`/`app_version`) memeriksa kredensial akun tenant,
+lalu otomatis memakai lisensi aktif dengan masa berlaku
+terpanjang milik akun itu (`License::currentForTenant` — lisensi
+tanpa kedaluwarsa dianggap terpanjang). Batas perangkat ditegakkan
+per lisensi seperti aktivasi kunci (`device_limit` 409). Login
+yang berhasil menerbitkan **token sesi perangkat**; token mentah
+hanya dikembalikan satu kali pada respons login dan server hanya
+menyimpan hash SHA-256-nya di kolom baru
+`license_devices.access_token_hash`. `POST /api/app/me`
+(header `Authorization: Bearer <token>`) mengembalikan payload
+bertanda tangan yang sama ditambah `license_status` yang jujur
+(`active`/`expired`/`suspended`/`revoked`/`tenant_inactive`)
+agar aplikasi bisa mengunci diri dengan alasan yang jelas, dan
+`POST /api/app/logout` menonaktifkan baris perangkat sehingga
+slotnya langsung bebas. Bila slot penuh, tenant mencabut
+perangkat lama sendiri dari halaman **Lisensi Saya** (daftar
+"Perangkat Terhubung" + tombol **Cabut Perangkat**); Super Admin
+juga bisa mencabutnya dari detail tenant untuk keperluan
+dukungan. Lisensi yang sedang dipakai aplikasi ditandai
+**Dipakai Aplikasi** di dashboard tenant. Untuk instalasi yang
+sudah jalan ada migrasi ketiga yang dijalankan setelah migrasi
+M4/M4b: `database/migrations/2026-10-31-m4c-device-token.sql`.
+Jalur kunci (`/api/license/activate|validate`) tetap hidup
+sebagai cadangan dan tidak terpengaruh migrasi ini.
+
 ## Roadmap milestone
 
 - **M1 — Fondasi (selesai):** scaffold ini — router, konfigurasi
