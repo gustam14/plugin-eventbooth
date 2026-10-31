@@ -10,13 +10,39 @@ final class Config
     /** Versi aplikasi; naikkan setiap milestone. */
     public static function appVersion(): string
     {
-        return '0.3.3';
+        return '0.4.0';
     }
 
-    /** Nomor milestone blueprint yang sedang berjalan (2 = auth & dashboard). */
+    /** Nomor milestone blueprint yang sedang berjalan (3 = Google Drive pusat). */
     public static function milestone(): int
     {
-        return 2;
+        return 3;
+    }
+
+    /**
+     * APP_KEY mentah dari .env — bahan kunci enkripsi Crypto untuk
+     * rahasia yang disimpan di database (refresh token Drive, dst).
+     * Nilai ini sendiri TIDAK pernah ditampilkan ke halaman mana pun.
+     */
+    public static function appKey(): ?string
+    {
+        return Env::get('APP_KEY');
+    }
+
+    /**
+     * Redirect URI OAuth Google yang didaftarkan di Google Cloud
+     * Console. Kanonis: {APP_URL}/auth/google/callback — di produksi
+     * https://plugin.eventbooth.id/auth/google/callback.
+     * GOOGLE_REDIRECT_URI di .env menang bila diisi.
+     */
+    public static function googleRedirectUri(): string
+    {
+        $fromEnv = Env::get('GOOGLE_REDIRECT_URI');
+        if (is_string($fromEnv) && trim($fromEnv) !== '') {
+            return trim($fromEnv);
+        }
+
+        return self::appUrl() . '/auth/google/callback';
     }
 
     public static function appName(): string

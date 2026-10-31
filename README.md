@@ -31,6 +31,10 @@ website/
 │   ├── Auth.php        # login session, peran, CSRF (M2)
 │   ├── Flash.php       # pesan kilat + isian formulir lama (M2)
 │   ├── Plan.php        # repository + validasi plan lisensi (M2)
+│   ├── Crypto.php      # enkripsi AES-256-GCM dari APP_KEY (M3)
+│   ├── Settings.php    # key-value app_settings (M3)
+│   ├── GoogleDrive.php # klien OAuth + Drive API via cURL (M3)
+│   ├── GoogleAccount.php # repository google_accounts (M3)
 │   └── views/
 │       ├── landing.php
 │       ├── partials/   # layout dashboard (atas & bawah)
@@ -112,6 +116,40 @@ akun bawaan dan tidak ada kata sandi bawaan di repo ini.
 Akun tenant dan pengguna tenant dibuat dari dashboard Super Admin
 pada milestone berikutnya.
 
+## Milestone 3 — Mengaitkan Google Drive pusat
+
+File semua tenant ditampung di akun Google Drive **milik platform**
+(multi-akun, satu akun default). Mengaitkannya dilakukan Super
+Admin dari dashboard — menu **Google Drive** (`/admin/drive`).
+Persiapan sekali di Google Cloud Console:
+
+1. Buka [Google Cloud Console](https://console.cloud.google.com/)
+   dan buat project baru (mis. "Plugin Eventbooth").
+2. Di **APIs & Services → Library**, aktifkan **Google Drive API**.
+3. Di **APIs & Services → OAuth consent screen**, pilih tipe
+   *External*, isi nama aplikasi & email dukungan. Selama status
+   penerbitan masih **Testing**, tambahkan email akun Google yang
+   akan dikaitkan sebagai **Test user** — tanpa itu Google menolak
+   persetujuan.
+4. Di **APIs & Services → Credentials → Create Credentials →
+   OAuth client ID**, pilih tipe **Web application** dan tambahkan
+   **Authorized redirect URI** persis seperti ini:
+   `https://plugin.eventbooth.id/auth/google/callback`
+5. Salin **Client ID** dan **Client Secret** hasil pembuatan ke
+   halaman **Google Drive** di dashboard Super Admin (menu
+   **Pengaturan OAuth Google**), lalu Simpan. Secret disimpan
+   terenkripsi (memakai `APP_KEY` di `.env`) dan tidak pernah
+   ditampilkan kembali.
+6. Klik **Kaitkan Google Drive**, masuk dengan akun Google platform
+   dan setujui aksesnya. Akun pertama otomatis menjadi default;
+   akun berikutnya bisa dikaitkan dengan cara yang sama dan
+   dijadikan default dari daftar akun.
+
+Syarat server: `APP_KEY` di `.env` wajib terisi (string acak
+panjang) — tanpa itu tombol pengaitan nonaktif, karena refresh
+token tidak boleh disimpan tanpa enkripsi. Endpoint
+`/api/drive/*` untuk n8n/aplikasi menyusul di M5.
+
 ## Roadmap milestone
 
 - **M1 — Fondasi (selesai):** scaffold ini — router, konfigurasi
@@ -126,9 +164,12 @@ pada milestone berikutnya.
   pembuatan akun Super Admin pertama (`database/seed-admin.sql`).
   CRUD tenant & lisensi, ikatan device, dan audit log menyusul pada
   milestone lanjutan (lisensi & heartbeat API di M6).
-- **M3 — Google Drive pusat:** tombol "Kaitkan Google Drive"
-  (OAuth, refresh token terenkripsi), multi-akun + akun default,
-  penugasan Drive per event, endpoint `/api/drive/*`.
+- **M3 — Google Drive pusat (selesai):** manajemen koneksi Drive
+  di dashboard Super Admin — kredensial OAuth (Client Secret
+  terenkripsi), tombol "Kaitkan Google Drive" (OAuth,
+  refresh token terenkripsi), multi-akun + akun default, tes
+  koneksi & kuota, putuskan akun. Penugasan Drive per event dan
+  endpoint `/api/drive/*` menyusul di M5.
 - **M4 — Midtrans:** checkout & perpanjangan lisensi (Midtrans
   platform) dan pembayaran tamu (Midtrans per tenant), webhook
   notifikasi terverifikasi tanda tangan.

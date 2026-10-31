@@ -270,6 +270,15 @@ table.list tr:last-child td { border-bottom: none; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .row-actions form { display: inline; }
 
+/* ---------- Bilah kuota (Google Drive) ---------- */
+.quota-bar {
+    width: 170px; max-width: 100%; height: 8px;
+    background: rgba(255, 255, 255, .08);
+    border-radius: 999px; overflow: hidden; margin-bottom: 5px;
+}
+.quota-fill { height: 100%; background: var(--gold-grad); border-radius: 999px; }
+.quota-text { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+
 /* ---------- Formulir ---------- */
 form .field { margin-bottom: 18px; }
 form label { display: block; font-size: 13.5px; font-weight: 600; margin-bottom: 7px; color: var(--text); }

@@ -12,6 +12,8 @@ declare(strict_types=1);
  *   GET  /admin, CRUD plan di /admin/plans                    (M2)
  *   GET  /tenant                                              (M2)
  *   GET|POST /account/password -> ganti kata sandi            (M2.1)
+ *   GET  /admin/drive + OAuth Google Drive pusat              (M3)
+ *   GET  /auth/google/callback -> callback OAuth Google       (M3)
  *
  * Grup API lain di bawah masih STUB 501 bertanda TODO; logika
  * bisnisnya (lisensi, Midtrans, Drive, sesi) dibangun bertahap
@@ -442,6 +444,396 @@ $router->post('/admin/plans/{id}/toggle', static function (array $params): void 
 });
 
 /* ---------------------------------------------------------------------
+ * Google Drive pusat (Milestone 3) — hanya role super_admin.
+ *
+ * Mengelola koneksi akun Drive MILIK PLATFORM (blueprint §2A):
+ * kredensial OAuth disimpan di app_settings (Client Secret
+ * terenkripsi Crypto), refresh token akun disimpan terenkripsi di
+ * google_accounts. Token TIDAK PERNAH ditampilkan, dicatat ke log,
+ * atau dimasukkan ke pesan flash.
+ *
+ * Endpoint /api/drive/* untuk n8n/aplikasi tetap stub 501 —
+ * dibangun pada milestone berikutnya.
+ * ------------------------------------------------------------------- */
+
+/**
+ * Baca kredensial OAuth Google dari app_settings.
+ *
+ * @return array{client_id: string, secret_cipher: ?string}
+ */
+$googleCredentials = static function (PDO $pdo): array {
+    $clientId = '';
+    $secretCipher = null;
+    try {
+        $clientId = trim((string) (Settings::get($pdo, 'google_client_id') ?? ''));
+        $stored = Settings::get($pdo, 'google_client_secret');
+        $secretCipher = ($stored !== null && trim($stored) !== '') ? $stored : null;
+    } catch (PDOException) {
+        // Tabel pengaturan belum ada: perlakukan sebagai belum diatur.
+    }
+
+    return ['client_id' => $clientId, 'secret_cipher' => $secretCipher];
+};
+
+$router->get('/admin/drive', static function () use ($googleCredentials): void {
+    $user = Auth::requireRole('super_admin');
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, halaman Google Drive belum dapat ditampilkan.');
+        redirect('/admin');
+    }
+
+    try {
+        $creds = $googleCredentials($pdo);
+        $accounts = GoogleAccount::all($pdo);
+    } catch (PDOException) {
+        Flash::error('Tabel Google Drive belum tersedia. Pastikan database/schema.sql sudah diimpor.');
+        redirect('/admin');
+    }
+
+    $cryptoReady = Crypto::isConfigured();
+    $secretSet = $creds['secret_cipher'] !== null;
+
+    View::render('admin/drive/index', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'cryptoReady' => $cryptoReady,
+        'clientId' => $creds['client_id'],
+        'secretSet' => $secretSet,
+        'credentialsReady' => $cryptoReady && $creds['client_id'] !== '' && $secretSet,
+        'redirectUri' => Config::googleRedirectUri(),
+        'accounts' => $accounts,
+    ]);
+});
+
+$router->post('/admin/drive/settings', static function (): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, pengaturan belum dapat disimpan.');
+        redirect('/admin');
+    }
+
+    $clientId = trim((string) ($_POST['google_client_id'] ?? ''));
+    $secretInput = trim((string) ($_POST['google_client_secret'] ?? ''));
+
+    try {
+        Settings::set($pdo, 'google_client_id', $clientId, false, $user['id']);
+
+        // Secret kosong = pertahankan yang lama. Secret baru wajib
+        // bisa dienkripsi — tanpa APP_KEY, menolak menyimpannya
+        // lebih aman daripada menyimpannya sebagai teks biasa.
+        if ($secretInput !== '') {
+            $cipher = Crypto::encrypt($secretInput);
+            if ($cipher === null) {
+                Flash::error('APP_KEY belum diatur di .env, Client Secret tidak dapat disimpan terenkripsi. Atur APP_KEY dulu, lalu coba lagi.');
+                redirect('/admin/drive');
+            }
+            Settings::set($pdo, 'google_client_secret', $cipher, true, $user['id']);
+        }
+    } catch (PDOException) {
+        Flash::error('Pengaturan gagal disimpan. Silakan coba lagi.');
+        redirect('/admin/drive');
+    }
+
+    Flash::success('Pengaturan OAuth Google berhasil disimpan.');
+    redirect('/admin/drive');
+});
+
+$router->get('/admin/drive/connect', static function () use ($googleCredentials): void {
+    Auth::requireRole('super_admin');
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, akun Drive belum dapat dikaitkan.');
+        redirect('/admin');
+    }
+
+    $creds = $googleCredentials($pdo);
+    if (!Crypto::isConfigured() || $creds['client_id'] === '' || $creds['secret_cipher'] === null) {
+        Flash::error('Lengkapi dulu Client ID & Client Secret (dan APP_KEY di .env) sebelum mengaitkan akun Drive.');
+        redirect('/admin/drive');
+    }
+
+    // State acak satu kali pakai, diikat ke session admin yang
+    // memulai proses — diverifikasi di /auth/google/callback.
+    Auth::start();
+    $state = bin2hex(random_bytes(24));
+    $_SESSION['google_oauth_state'] = $state;
+
+    redirect(GoogleDrive::authUrl($creds['client_id'], Config::googleRedirectUri(), $state));
+});
+
+/**
+ * Callback OAuth Google — rute PUBLIK (browser diarahkan Google ke
+ * sini). Keamanan bertumpu pada: (1) cookie session admin yang
+ * memulai proses harus masih ada, (2) parameter state harus cocok
+ * dengan yang disimpan di session. Tanpa keduanya, ditolak.
+ */
+$router->get('/auth/google/callback', static function () use ($googleCredentials): void {
+    Auth::start();
+    $expectedState = $_SESSION['google_oauth_state'] ?? null;
+    unset($_SESSION['google_oauth_state']); // Sekali pakai.
+
+    $user = Auth::user();
+    if ($user === null) {
+        Flash::error('Sesi login tidak ditemukan atau sudah berakhir. Masuk kembali, lalu ulangi pengaitan Drive.');
+        redirect('/login');
+    }
+    if (($user['role'] ?? '') !== 'super_admin') {
+        Flash::error('Hanya Super Admin yang dapat mengaitkan akun Google Drive.');
+        redirect('/dashboard');
+    }
+
+    $state = $_GET['state'] ?? null;
+    if (!is_string($expectedState) || !is_string($state) || !hash_equals($expectedState, $state)) {
+        Flash::error('Verifikasi keamanan OAuth gagal (state tidak cocok). Silakan ulangi pengaitan dari halaman Google Drive.');
+        redirect('/admin/drive');
+    }
+
+    if (isset($_GET['error'])) {
+        Flash::error('Google membatalkan atau menolak proses pengaitan. Silakan coba lagi dan setujui akses yang diminta.');
+        redirect('/admin/drive');
+    }
+
+    $code = $_GET['code'] ?? null;
+    if (!is_string($code) || $code === '') {
+        Flash::error('Kode otorisasi dari Google tidak diterima. Silakan ulangi pengaitan.');
+        redirect('/admin/drive');
+    }
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, akun Drive tidak dapat disimpan.');
+        redirect('/admin/drive');
+    }
+
+    $creds = $googleCredentials($pdo);
+    $clientSecret = $creds['secret_cipher'] !== null ? Crypto::decrypt($creds['secret_cipher']) : null;
+    if ($creds['client_id'] === '' || $clientSecret === null) {
+        Flash::error('Kredensial OAuth Google tidak lengkap atau tidak dapat dibaca (periksa APP_KEY). Perbarui pengaturan lalu ulangi pengaitan.');
+        redirect('/admin/drive');
+    }
+
+    $tokens = GoogleDrive::exchangeCode(
+        $creds['client_id'],
+        $clientSecret,
+        $code,
+        Config::googleRedirectUri()
+    );
+    if ($tokens === null || !isset($tokens['access_token'])) {
+        Flash::error('Pertukaran kode otorisasi dengan Google gagal. Silakan coba lagi.');
+        redirect('/admin/drive');
+    }
+
+    $refreshToken = $tokens['refresh_token'] ?? null;
+    if (!is_string($refreshToken) || $refreshToken === '') {
+        // Hampir tidak terjadi karena prompt=consent, tetapi Google
+        // bisa saja tidak menerbitkan refresh token bila aplikasi
+        // pernah diberi akses tanpa pencabutan.
+        Flash::error('Google tidak memberikan refresh token. Hapus akses aplikasi ini di myaccount.google.com/permissions pada akun tersebut, lalu kaitkan lagi.');
+        redirect('/admin/drive');
+    }
+
+    $accessToken = (string) $tokens['access_token'];
+
+    $about = GoogleDrive::about($accessToken);
+    if ($about === null) {
+        Flash::error('Akun Google berhasil diautentikasi, tetapi info akunnya tidak dapat dibaca. Silakan coba lagi.');
+        redirect('/admin/drive');
+    }
+
+    $rootFolderId = GoogleDrive::ensureRootFolder($accessToken);
+
+    $encryptedRefresh = Crypto::encrypt($refreshToken);
+    if ($encryptedRefresh === null) {
+        Flash::error('APP_KEY belum diatur di .env, refresh token tidak dapat disimpan terenkripsi.');
+        redirect('/admin/drive');
+    }
+
+    try {
+        $accountId = GoogleAccount::upsertByEmail($pdo, [
+            'google_email' => $about['email'],
+            'refresh_token_encrypted' => $encryptedRefresh,
+            'root_folder_id' => $rootFolderId,
+            'quota_total_bytes' => $about['quota_total'],
+            'quota_used_bytes' => $about['quota_used'],
+            'connected_by' => $user['id'],
+            'label' => $about['display_name'],
+        ]);
+
+        // Akun pertama (atau bila belum ada default sama sekali)
+        // otomatis menjadi akun default.
+        if (GoogleAccount::defaultAccount($pdo) === null) {
+            GoogleAccount::setDefault($pdo, $accountId);
+        }
+    } catch (PDOException) {
+        Flash::error('Akun Google gagal disimpan ke database. Silakan coba lagi.');
+        redirect('/admin/drive');
+    }
+
+    if ($rootFolderId === null) {
+        Flash::info('Akun ' . $about['email'] . ' terkait, tetapi folder root "Plugin Eventbooth" belum berhasil dibuat — gunakan Tes Koneksi untuk memeriksa aksesnya.');
+    }
+
+    Flash::success('Akun Google ' . $about['email'] . ' berhasil dikaitkan sebagai Drive pusat.');
+    redirect('/admin/drive');
+});
+
+$router->post('/admin/drive/{id}/default', static function (array $params): void {
+    Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, akun default belum dapat diubah.');
+        redirect('/admin');
+    }
+
+    $id = (int) ($params['id'] ?? 0);
+    $account = GoogleAccount::find($pdo, $id);
+    if ($account === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    try {
+        GoogleAccount::setDefault($pdo, $id);
+    } catch (PDOException) {
+        Flash::error('Akun default gagal diubah. Silakan coba lagi.');
+        redirect('/admin/drive');
+    }
+
+    Flash::success('Akun ' . (string) $account['google_email'] . ' sekarang menjadi Drive default.');
+    redirect('/admin/drive');
+});
+
+$router->post('/admin/drive/{id}/test', static function (array $params) use ($googleCredentials): void {
+    Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, koneksi belum dapat dites.');
+        redirect('/admin');
+    }
+
+    $id = (int) ($params['id'] ?? 0);
+    $account = GoogleAccount::find($pdo, $id);
+    if ($account === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $email = (string) $account['google_email'];
+
+    $creds = $googleCredentials($pdo);
+    $clientSecret = $creds['secret_cipher'] !== null ? Crypto::decrypt($creds['secret_cipher']) : null;
+    $refreshToken = Crypto::decrypt((string) $account['refresh_token_encrypted']);
+
+    if ($creds['client_id'] === '' || $clientSecret === null || $refreshToken === null) {
+        try {
+            GoogleAccount::setStatus($pdo, $id, 'error');
+        } catch (PDOException) {
+            // Status gagal ditulis; pesan ke pengguna tetap disampaikan.
+        }
+        Flash::error('Kredensial OAuth atau refresh token akun ' . $email . ' tidak dapat dibaca (periksa Client ID/Secret dan APP_KEY).');
+        redirect('/admin/drive');
+    }
+
+    $accessToken = GoogleDrive::refreshAccessToken($creds['client_id'], $clientSecret, $refreshToken);
+    $about = $accessToken !== null ? GoogleDrive::about($accessToken) : null;
+
+    if ($about === null) {
+        try {
+            GoogleAccount::setStatus($pdo, $id, 'error');
+        } catch (PDOException) {
+            // Abaikan: pesan error utama sudah jelas.
+        }
+        Flash::error('Tes koneksi akun ' . $email . ' gagal — Google menolak tokennya. Coba kaitkan ulang akun ini.');
+        redirect('/admin/drive');
+    }
+
+    try {
+        GoogleAccount::updateQuota($pdo, $id, $about['quota_total'], $about['quota_used']);
+        GoogleAccount::setStatus($pdo, $id, 'connected');
+
+        // Folder root yang belum terbentuk dicoba dibuat lagi di sini.
+        if (empty($account['root_folder_id']) && $accessToken !== null) {
+            $folderId = GoogleDrive::ensureRootFolder($accessToken);
+            if ($folderId !== null) {
+                GoogleAccount::updateRootFolder($pdo, $id, $folderId);
+            }
+        }
+    } catch (PDOException) {
+        Flash::error('Hasil tes koneksi gagal disimpan. Silakan coba lagi.');
+        redirect('/admin/drive');
+    }
+
+    Flash::success('Koneksi akun ' . $email . ' sehat — kuota Drive diperbarui.');
+    redirect('/admin/drive');
+});
+
+$router->post('/admin/drive/{id}/disconnect', static function (array $params): void {
+    Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, akun belum dapat diputuskan.');
+        redirect('/admin');
+    }
+
+    $id = (int) ($params['id'] ?? 0);
+    $account = GoogleAccount::find($pdo, $id);
+    if ($account === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $email = (string) $account['google_email'];
+    $wasDefault = (int) ($account['is_default'] ?? 0) === 1;
+
+    // Cabut akses di sisi Google (usaha terbaik — kegagalan di sini
+    // tidak menghalangi pemutusan lokal).
+    $refreshToken = Crypto::decrypt((string) $account['refresh_token_encrypted']);
+    if ($refreshToken !== null) {
+        GoogleDrive::revoke($refreshToken);
+    }
+
+    try {
+        GoogleAccount::delete($pdo, $id);
+
+        // Default yang hilang digantikan akun tertua yang tersisa.
+        if ($wasDefault) {
+            $remaining = GoogleAccount::all($pdo);
+            if ($remaining !== []) {
+                GoogleAccount::setDefault($pdo, (int) $remaining[0]['id']);
+            }
+        }
+    } catch (PDOException) {
+        Flash::error('Akun gagal diputuskan. Silakan coba lagi.');
+        redirect('/admin/drive');
+    }
+
+    Flash::success('Akun ' . $email . ' sudah diputuskan dari Drive pusat.');
+    redirect('/admin/drive');
+});
+
+/* ---------------------------------------------------------------------
  * Area Tenant (Milestone 2) — role tenant_admin & tenant_staff.
  * Semua query dibatasi tenant_id milik pengguna yang login.
  * ------------------------------------------------------------------- */
@@ -551,11 +943,12 @@ $router->post('/api/payment/create', $stub('Buat pembayaran tamu — Milestone 4
 $router->post('/api/payment/notification', $stub('Webhook notifikasi Midtrans — Milestone 4.'));
 $router->get('/api/payment/status', $stub('Polling status pembayaran — Milestone 4.'));
 
-// TODO(M3/M5): Google Drive terpusat multi-akun (blueprint §2A & §3).
-// Dipanggil n8n/aplikasi dengan token workflow; token Drive tidak
-// pernah keluar dari server ini.
-$router->post('/api/drive/folder', $stub('Buat folder Drive tenant/event/sesi — Milestone 3/5.'));
-$router->post('/api/drive/init-upload', $stub('Inisiasi resumable upload Drive — Milestone 3/5.'));
+// TODO(M5): Endpoint Drive untuk n8n/aplikasi (blueprint §2A & §3).
+// Manajemen koneksinya (OAuth, multi-akun, default) sudah hidup di
+// /admin/drive sejak M3; endpoint di bawah dipanggil n8n/aplikasi
+// dengan token workflow — token Drive tidak pernah keluar server ini.
+$router->post('/api/drive/folder', $stub('Buat folder Drive tenant/event/sesi — Milestone 5.'));
+$router->post('/api/drive/init-upload', $stub('Inisiasi resumable upload Drive — Milestone 5.'));
 
 // TODO(M5): Registrasi metadata sesi selesai upload & berbagi
 // WhatsApp lewat n8n/MPWA (blueprint §3 langkah 5 & §5C).
