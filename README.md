@@ -427,8 +427,13 @@ dengan pembayaran Midtrans milik platform:
   environment (Sandbox/Production), Client Key, dan Server Key
   Midtrans platform; Server Key disimpan terenkripsi (APP_KEY)
   dan tidak pernah ditampilkan/dikirim ke peramban. Halaman ini
-  juga menampilkan URL notifikasi yang harus didaftarkan di
-  dashboard Midtrans dan 50 pesanan lisensi terbaru semua tenant.
+  juga menampilkan 50 pesanan lisensi terbaru semua tenant.
+  URL notifikasi dashboard Midtrans **tidak perlu diubah**:
+  akun Midtrans platform dipakai bersama website utama pemilik,
+  jadi setiap pembuatan transaksi Snap menyertakan header
+  `X-Override-Notification` berisi URL webhook aplikasi ini
+  (v0.8.1) — notifikasi checkout lisensi menggantikan alamat
+  dashboard hanya untuk transaksi lisensi itu sendiri.
 - **Tenant — halaman Lisensi Saya:** seksi "Beli / Perpanjang
   Lisensi" (plan aktif berbayar; membeli berarti menambah masa
   aktif lisensi berjalan mengikuti aturan Tambah Masa Aktif,

@@ -71,16 +71,17 @@ $fmtRupiah = static fn ($amount): string => 'Rp ' . number_format((float) $amoun
 
 <div class="panel-box" style="margin-bottom: 22px;">
     <h2 style="margin-top: 0;">URL Notifikasi Midtrans</h2>
-    <p class="sub">
-        Daftarkan alamat ini di dashboard Midtrans (Settings →
-        Configuration → <em>Payment Notification URL</em>) agar
-        pelunasan tercatat dan lisensi tenant terpenuhi otomatis:
-    </p>
     <p><code><?= e($notifyUrl) ?></code></p>
     <p class="hint">
-        URL halaman selesai (finish) boleh diarahkan ke
-        <code>/tenant/licenses</code>. Notifikasi hanya diterima dari
-        Midtrans dan selalu diverifikasi tanda tangannya di server.
+        Alamat ini <strong>tidak perlu</strong> didaftarkan di
+        dashboard Midtrans. Setiap pembuatan transaksi Snap dari
+        aplikasi ini menyertakan header
+        <code>X-Override-Notification</code> berisi alamat di atas,
+        yang menggantikan URL notifikasi dashboard khusus untuk
+        transaksi lisensi — jadi URL notifikasi di dashboard
+        Midtrans boleh tetap menunjuk ke sistem lain (mis. website
+        utama) tanpa bentrok. Notifikasi yang tiba selalu
+        diverifikasi tanda tangannya di server sebelum dipercaya.
     </p>
 </div>
 

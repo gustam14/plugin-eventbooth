@@ -77,6 +77,17 @@ final class Midtrans
         }
     }
 
+    /**
+     * URL notifikasi webhook aplikasi ini (dari APP_URL) — dikirim
+     * sebagai X-Override-Notification pada setiap pembuatan
+     * transaksi Snap dan ditampilkan di halaman admin sebagai
+     * referensi.
+     */
+    public static function notifyUrl(): string
+    {
+        return Config::appUrl() . '/api/payments/midtrans/notify';
+    }
+
     /** URL berkas Snap.js sesuai environment. */
     public static function snapJsUrl(string $environment): string
     {
@@ -133,7 +144,15 @@ final class Midtrans
         ];
 
         $url = self::apiBase($config['environment']) . '/snap/v1/transactions';
-        $response = self::httpJson('POST', $url, $payload, (string) $config['server_key']);
+        // Akun Midtrans platform dipakai bersama website utama
+        // pemilik, yang URL notifikasi dashboardnya menunjuk ke
+        // sistem lain. Header X-Override-Notification mengganti
+        // URL notifikasi dashboard KHUSUS untuk transaksi ini,
+        // jadi notifikasi checkout lisensi selalu tiba di sini
+        // tanpa mengubah pengaturan dashboard Midtrans sama sekali.
+        $response = self::httpJson('POST', $url, $payload, (string) $config['server_key'], [
+            'X-Override-Notification: ' . self::notifyUrl(),
+        ]);
 
         $token = (string) ($response['token'] ?? '');
         if ($token === '') {
@@ -214,10 +233,11 @@ final class Midtrans
      * HTTP JSON ke API Midtrans dengan Basic Auth Server Key.
      *
      * @param array<string, mixed> $payload
+     * @param array<int, string> $extraHeaders Header tambahan (mis. X-Override-Notification).
      * @return array<string, mixed>
      * @throws MidtransException
      */
-    private static function httpJson(string $method, string $url, array $payload, string $serverKey): array
+    private static function httpJson(string $method, string $url, array $payload, string $serverKey, array $extraHeaders = []): array
     {
         if (!function_exists('curl_init')) {
             throw new MidtransException('Ekstensi cURL tidak tersedia di server.');
@@ -228,11 +248,11 @@ final class Midtrans
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_SLASHES),
-            CURLOPT_HTTPHEADER => [
+            CURLOPT_HTTPHEADER => array_merge([
                 'Accept: application/json',
                 'Content-Type: application/json',
                 'Authorization: Basic ' . base64_encode($serverKey . ':'),
-            ],
+            ], $extraHeaders),
             CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_TIMEOUT => 30,
         ]);

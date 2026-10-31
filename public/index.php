@@ -1139,9 +1139,6 @@ $router->get('/admin/payments', static function (): void {
         }
     }
 
-    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-    $host = (string) ($_SERVER['HTTP_HOST'] ?? 'plugin.eventbooth.id');
-
     View::render('admin/payments/index', [
         'appName' => Config::appName(),
         'user' => $user,
@@ -1150,7 +1147,7 @@ $router->get('/admin/payments', static function (): void {
         'serverKeyStored' => $midtrans['server_key'] !== null,
         'orders' => $orders,
         'ordersReady' => $ordersReady,
-        'notifyUrl' => $scheme . '://' . $host . '/api/payments/midtrans/notify',
+        'notifyUrl' => Midtrans::notifyUrl(),
     ]);
 });
 
