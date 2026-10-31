@@ -6,11 +6,17 @@ declare(strict_types=1);
  * `license_devices`) — Milestone 4.
  *
  * Keputusan skema nyata yang diikuti:
- *   - Kunci lisensi TIDAK disimpan mentah: `license_key_hash` =
- *     SHA-256 atas kunci ternormalisasi, `license_key_prefix` =
- *     12 karakter pertama kunci untuk identifikasi di dashboard.
- *     Kunci utuh hanya ada SEKALI di tangan Super Admin saat
- *     penerbitan (ditampilkan satu kali dari session).
+ *   - Pencarian kunci oleh API selalu memakai `license_key_hash` =
+ *     SHA-256 atas kunci ternormalisasi; `license_key_prefix` =
+ *     12 karakter pertama kunci untuk identifikasi cepat.
+ *   - Keputusan pemilik (v0.5.1): kunci lisensi harus TETAP TERLIHAT
+ *     PENUH di dashboard Super Admin dan dashboard tenant, jadi
+ *     sejak migrasi M4b kunci utuh juga disimpan di kolom
+ *     `license_key`. Lisensi yang diterbitkan sebelum kolom itu
+ *     ada bernilai NULL di kolom tersebut — kuncinya tidak bisa
+ *     dimunculkan lagi (UI menampilkan prefix + catatan lisensi
+ *     lama). Spanduk satu kali saat penerbitan tetap ditampilkan
+ *     sebagai umpan balik langsung.
  *   - Snapshot plan: kolom lama `max_devices` (snapshot bawaan
  *     skema) tetap diisi, ditambah `plan_snapshot` JSON (M4) berisi
  *     seluruh batas & fitur plan saat terbit. Hak akses (entitlement)
@@ -303,8 +309,11 @@ final class License
      *
      * @param array<string, mixed> $plan Baris plan aktif.
      * @return array{license: array<string, mixed>, key: string}
-     *         Baris lisensi + KUNCI MENTAH (hanya tersedia di sini;
-     *         sesudah ini yang tersimpan hanya hash + prefix).
+     *         Baris lisensi + KUNCI MENTAH. Kunci disimpan sebagai
+     *         hash (untuk API) DAN sebagai teks utuh di kolom
+     *         `license_key` (untuk tampilan dashboard, v0.5.1);
+     *         nilai kembalian ini dipakai untuk spanduk satu kali
+     *         tepat setelah penerbitan.
      */
     public static function issue(PDO $pdo, int $tenantId, array $plan, ?int $createdBy = null): array
     {
@@ -335,11 +344,11 @@ final class License
 
         $stmt = $pdo->prepare(
             'INSERT INTO licenses
-                (tenant_id, plan_id, license_key_hash, license_key_prefix,
+                (tenant_id, plan_id, license_key_hash, license_key_prefix, license_key,
                  status, max_devices, plan_snapshot, starts_at, expires_at,
                  source, created_by)
              VALUES
-                (:tenant_id, :plan_id, :hash, :prefix,
+                (:tenant_id, :plan_id, :hash, :prefix, :full_key,
                  \'active\', :max_devices, :snapshot, :starts_at, :expires_at,
                  \'manual\', :created_by)'
         );
@@ -348,6 +357,7 @@ final class License
             'plan_id' => (int) $plan['id'],
             'hash' => $hash,
             'prefix' => substr($key, 0, 12),
+            'full_key' => $key,
             'max_devices' => (int) ($plan['max_devices'] ?? 1),
             'snapshot' => json_encode($snapshot, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
             'starts_at' => $startsAt,

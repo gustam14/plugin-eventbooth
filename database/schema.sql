@@ -116,6 +116,7 @@ CREATE TABLE licenses (
     plan_id          BIGINT UNSIGNED NOT NULL,
     license_key_hash CHAR(64) NOT NULL,
     license_key_prefix VARCHAR(16) NOT NULL COMMENT 'Awalan kunci untuk identifikasi di dashboard',
+    license_key      VARCHAR(32) NULL COMMENT 'Kunci utuh — tampil di dashboard Super Admin & tenant (keputusan pemilik v0.5.1); NULL untuk lisensi lama',
     status           ENUM('pending','active','suspended','revoked','expired') NOT NULL DEFAULT 'pending',
     max_devices      INT NOT NULL DEFAULT 1 COMMENT 'Snapshot dari plan saat terbit',
     plan_snapshot    JSON NULL COMMENT 'Snapshot lengkap batas & fitur plan saat lisensi terbit (nama, durasi, batas, fitur)',

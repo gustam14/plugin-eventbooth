@@ -80,6 +80,9 @@ $statusLabel = static function (?string $status): string {
             Admin bila ini tidak sesuai.
         </p>
     <?php endif; ?>
+    <div class="form-actions">
+        <a class="btn btn-primary" href="/tenant/licenses">Lihat Lisensi Saya</a>
+    </div>
 </div>
 
 <div class="cards">
@@ -93,10 +96,10 @@ $statusLabel = static function (?string $status): string {
         <h2>Paket &amp; Timer</h2>
         <p>Paket harga/timer fleksibel per event — per sesi, per durasi, atau gabungan — plus kunci payment yang bisa dimatikan untuk wedding.</p>
     </div>
-    <div class="card soon">
-        <span class="soon-tag">Segera hadir</span>
+    <div class="card">
         <h2>Lisensi Saya</h2>
-        <p>Lihat masa berlaku lisensi, perangkat yang terikat, dan perpanjang lisensi dari sini.</p>
+        <p>Lihat kunci, masa berlaku, dan perangkat yang terikat pada lisensimu.</p>
+        <p style="margin-top: 10px;"><a class="btn btn-small" href="/tenant/licenses">Buka Lisensi Saya</a></p>
     </div>
     <div class="card soon">
         <span class="soon-tag">Segera hadir</span>

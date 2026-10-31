@@ -275,6 +275,12 @@ table.list tr:last-child td { border-bottom: none; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .row-actions form { display: inline; }
 
+/* ---------- Kunci lisensi teks penuh ---------- */
+.key-full {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: .04em; user-select: all; word-break: break-all;
+}
+
 /* ---------- Bilah kuota (Google Drive) ---------- */
 .quota-bar {
     width: 170px; max-width: 100%; height: 8px;

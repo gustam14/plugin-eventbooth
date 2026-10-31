@@ -196,6 +196,18 @@ M4 sekali di phpMyAdmin —
 `license_notifications`). Instalasi baru dari `schema.sql` tidak
 memerlukannya karena skema sudah memuat perubahan yang sama.
 
+**Keputusan pemilik (v0.5.1) — kunci lisensi terlihat penuh:**
+kunci lisensi kini disimpan juga sebagai teks biasa di kolom
+`licenses.license_key` dan tampil PENUH di dashboard Super Admin
+serta di halaman **Lisensi Saya** milik tenant
+(`/tenant/licenses`); pencarian API tetap memakai hash. Untuk
+instalasi yang sudah jalan ada migrasi kedua yang dijalankan
+setelah migrasi M4:
+`database/migrations/2026-10-31-m4b-license-key-visible.sql`.
+Lisensi yang diterbitkan sebelum migrasi kedua ini kuncinya tidak
+tersimpan dan tidak bisa dimunculkan — cabut & terbitkan ulang
+bila kuncinya diperlukan.
+
 ## Roadmap milestone
 
 - **M1 — Fondasi (selesai):** scaffold ini — router, konfigurasi

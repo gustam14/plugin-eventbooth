@@ -8,7 +8,7 @@
  * @var string $title      Judul halaman.
  * @var array{id: int, tenant_id: ?int, name: string, email: string, role: string} $user
  * @var array<int, array{type: string, message: string}> $flashes
- * @var string $activeNav  Kunci menu aktif: admin | plans | tenants | drive | tenant | account.
+ * @var string $activeNav  Kunci menu aktif: admin | plans | tenants | drive | tenant | licenses | account.
  */
 
 $roleLabel = match ($user['role'] ?? '') {
@@ -31,9 +31,10 @@ if (($user['role'] ?? '') === 'super_admin') {
 } else {
     $navItems = [
         ['key' => 'tenant', 'label' => 'Ringkasan', 'href' => '/tenant'],
+        ['key' => 'licenses', 'label' => 'Lisensi Saya', 'href' => '/tenant/licenses'],
         ['key' => 'account', 'label' => 'Ganti Kata Sandi', 'href' => '/account/password'],
     ];
-    $navSoon = ['Event', 'Paket', 'Lisensi', 'Midtrans', 'Statistik'];
+    $navSoon = ['Event', 'Paket', 'Midtrans', 'Statistik'];
 }
 ?>
 <!DOCTYPE html>

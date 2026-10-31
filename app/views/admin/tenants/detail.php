@@ -196,7 +196,12 @@ $roleLabel = static function (string $role): string {
                 <tr>
                     <td>
                         <strong><?= e((string) ($license['plan_name'] ?? $ent['plan_name'])) ?></strong><br>
-                        <code><?= e(License::maskedKey($license)) ?></code>
+                        <?php if (!empty($license['license_key'])): ?>
+                            <span class="key-full"><?= e((string) $license['license_key']) ?></span>
+                        <?php else: ?>
+                            <code><?= e(License::maskedKey($license)) ?></code><br>
+                            <span class="hint">kunci tidak tersimpan (lisensi lama)</span>
+                        <?php endif; ?>
                     </td>
                     <td>
                         <span class="<?= e(License::statusBadgeClass($effective)) ?>"><?= e(License::statusLabel($effective)) ?></span>

@@ -13,6 +13,7 @@ declare(strict_types=1);
  *   GET|POST /login, POST /logout, GET /dashboard             (M2)
  *   GET  /admin, CRUD plan di /admin/plans                    (M2)
  *   GET  /tenant                                              (M2)
+ *   GET  /tenant/licenses -> lisensi milik tenant             (M4)
  *   GET|POST /account/password -> ganti kata sandi            (M2.1)
  *   GET  /admin/drive + OAuth Google Drive pusat              (M3)
  *   GET  /auth/google/callback -> callback OAuth Google       (M3)
@@ -1454,6 +1455,34 @@ $router->get('/tenant', static function (): void {
         'tenant' => $tenant,
         'counts' => $counts,
         'license' => $license,
+    ]);
+});
+
+/**
+ * Lisensi milik tenant yang login (Milestone 4; kunci tampil penuh
+ * sesuai keputusan pemilik v0.5.1). Query dibatasi tenant_id
+ * pengguna — tenant tidak pernah melihat lisensi tenant lain.
+ */
+$router->get('/tenant/licenses', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $licenses = [];
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $licenses = License::forTenant($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            // Halaman tetap tampil dengan keadaan kosong.
+            $licenses = [];
+        }
+    }
+
+    View::render('tenant/licenses', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'licenses' => $licenses,
     ]);
 });
 

@@ -1,0 +1,25 @@
+-- =====================================================================
+-- Migrasi SATU KALI: Milestone 4b — kunci lisensi terlihat penuh.
+-- Plugin Eventbooth, 31 Oktober 2026 (kode v0.5.1).
+--
+-- Latar: keputusan pemilik — kunci lisensi harus TETAP TERLIHAT
+-- PENUH di dashboard Super Admin maupun dashboard tenant (halaman
+-- "Lisensi Saya"). Migrasi ini menambah kolom licenses.license_key
+-- untuk menyimpan kunci utuh lisensi yang diterbitkan SETELAH
+-- migrasi ini. Hash SHA-256 (license_key_hash) tetap dipakai
+-- untuk pencarian oleh API aplikasi booth dan tidak berubah.
+--
+-- PENTING: lisensi yang diterbitkan SEBELUM migrasi ini kuncinya
+-- tidak tersimpan (kolomnya akan NULL) dan tidak bisa dimunculkan
+-- lagi di dashboard — di UI lisensi lama tampil terpotong dengan
+-- catatan "kunci tidak tersimpan (lisensi lama)". Bila kunci
+-- lisensi lama diperlukan, cabut lisensi itu lalu terbitkan ulang.
+--
+-- Cara pakai: buka phpMyAdmin, pilih database website ini, buka
+-- tab SQL, tempel SELURUH isi berkas ini, lalu klik Kirim.
+-- Jalankan hanya sekali, dan SETELAH migrasi Milestone 4
+-- (2026-10-31-m4-tenant-license.sql). Menjalankan ulang akan
+-- gagal karena kolomnya sudah ada.
+-- =====================================================================
+
+ALTER TABLE licenses ADD COLUMN license_key VARCHAR(32) NULL AFTER license_key_prefix;
