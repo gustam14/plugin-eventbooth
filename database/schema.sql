@@ -23,6 +23,7 @@ CREATE TABLE plans (
     description         VARCHAR(255) NULL,
     price               DECIMAL(12,2) NOT NULL DEFAULT 0,
     billing_period_days INT NOT NULL DEFAULT 30,
+    license_duration_days INT NOT NULL DEFAULT 30 COMMENT 'Masa aktif lisensi sejak diterbitkan/diperpanjang (hari); 0 = tanpa kedaluwarsa',
     max_devices         INT NOT NULL DEFAULT 1,
     max_events          INT NOT NULL DEFAULT 0,
     drive_quota_gb      INT NOT NULL DEFAULT 0,
@@ -362,14 +363,14 @@ CREATE TABLE app_settings (
 -- Akun Super Admin pertama dibuat lewat langkah instalasi (Milestone 2).
 -- =====================================================================
 INSERT INTO plans
-    (name, slug, description, price, billing_period_days, max_devices, max_events, drive_quota_gb, session_quota, retention_days, features, is_active, sort_order)
+    (name, slug, description, price, billing_period_days, license_duration_days, max_devices, max_events, drive_quota_gb, session_quota, retention_days, features, is_active, sort_order)
 VALUES
-    ('Trial', 'trial', 'Plan percobaan tenant baru. Nilai contoh — ubah dari dashboard Super Admin.', 0,       14, 1, 3,  15,  100,  30,  '{"payment_lock":true,"whatsapp_share":true}', 1, 1),
-    ('Basic', 'basic', 'Plan dasar untuk satu booth. Nilai contoh — ubah dari dashboard Super Admin.', 149000,  30, 1, 20, 50,  1000, 90,  '{"payment_lock":true,"whatsapp_share":true}',  1, 2),
-    ('Pro',   'pro',   'Plan pro untuk pemakaian intensif. Nilai contoh — ubah dari dashboard Super Admin.', 349000, 30, 3, 0, 200, 0,    365, '{"payment_lock":true,"whatsapp_share":true}', 1, 3)
+    ('Trial', 'trial', 'Plan percobaan tenant baru. Nilai contoh — ubah dari dashboard Super Admin.', 0,       14, 14, 1, 3,  15,  100,  30,  '{"payment_lock":true,"whatsapp_share":true}', 1, 1),
+    ('Basic', 'basic', 'Plan dasar untuk satu booth. Nilai contoh — ubah dari dashboard Super Admin.', 149000,  30, 30, 1, 20, 50,  1000, 90,  '{"payment_lock":true,"whatsapp_share":true}',  1, 2),
+    ('Pro',   'pro',   'Plan pro untuk pemakaian intensif. Nilai contoh — ubah dari dashboard Super Admin.', 349000, 30, 30, 3, 0, 200, 0,    365, '{"payment_lock":true,"whatsapp_share":true}', 1, 3)
 ON DUPLICATE KEY UPDATE
     name = VALUES(name), description = VALUES(description), price = VALUES(price),
-    billing_period_days = VALUES(billing_period_days), max_devices = VALUES(max_devices),
+    billing_period_days = VALUES(billing_period_days), license_duration_days = VALUES(license_duration_days), max_devices = VALUES(max_devices),
     max_events = VALUES(max_events), drive_quota_gb = VALUES(drive_quota_gb),
     session_quota = VALUES(session_quota), retention_days = VALUES(retention_days),
     features = VALUES(features), is_active = VALUES(is_active), sort_order = VALUES(sort_order);

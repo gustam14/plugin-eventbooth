@@ -9,7 +9,8 @@ declare(strict_types=1);
  * di schema.sql hanya contoh awal).
  *
  * Konvensi skema: nilai 0 pada kolom batas (max_events,
- * drive_quota_gb, session_quota) berarti "tanpa batas".
+ * drive_quota_gb, session_quota) berarti "tanpa batas"; nilai 0
+ * pada license_duration_days berarti lisensi tanpa kedaluwarsa.
  */
 final class Plan
 {
@@ -30,10 +31,31 @@ final class Plan
     {
         $stmt = $pdo->query(
             'SELECT id, name, slug, description, price, billing_period_days,
+                    license_duration_days,
                     max_devices, max_events, drive_quota_gb, session_quota,
                     retention_days, features, is_active, sort_order,
                     created_at, updated_at
                FROM plans
+              ORDER BY sort_order ASC, id ASC'
+        );
+
+        $rows = $stmt->fetchAll();
+        return is_array($rows) ? $rows : [];
+    }
+
+    /**
+     * Plan aktif untuk ditampilkan publik (mis. bagian paket di
+     * halaman landing). SELECT * disengaja: halaman publik harus
+     * tetap tangguh bila ada kolom baru yang belum dikenal kode ini.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function activePublic(PDO $pdo): array
+    {
+        $stmt = $pdo->query(
+            'SELECT *
+               FROM plans
+              WHERE is_active = 1
               ORDER BY sort_order ASC, id ASC'
         );
 
@@ -46,6 +68,7 @@ final class Plan
     {
         $stmt = $pdo->prepare(
             'SELECT id, name, slug, description, price, billing_period_days,
+                    license_duration_days,
                     max_devices, max_events, drive_quota_gb, session_quota,
                     retention_days, features, is_active, sort_order,
                     created_at, updated_at
@@ -68,10 +91,12 @@ final class Plan
         $stmt = $pdo->prepare(
             'INSERT INTO plans
                 (name, slug, description, price, billing_period_days,
+                 license_duration_days,
                  max_devices, max_events, drive_quota_gb, session_quota,
                  retention_days, features, is_active, sort_order)
              VALUES
                 (:name, :slug, :description, :price, :billing_period_days,
+                 :license_duration_days,
                  :max_devices, :max_events, :drive_quota_gb, :session_quota,
                  :retention_days, :features, :is_active, :sort_order)'
         );
@@ -90,6 +115,7 @@ final class Plan
                     description = :description,
                     price = :price,
                     billing_period_days = :billing_period_days,
+                    license_duration_days = :license_duration_days,
                     max_devices = :max_devices,
                     max_events = :max_events,
                     drive_quota_gb = :drive_quota_gb,
@@ -210,6 +236,7 @@ final class Plan
         // --- Kolom bilangan bulat ------------------------------------
         $intFields = [
             'billing_period_days' => ['label' => 'Periode tagihan (hari)', 'min' => 1, 'default' => 30],
+            'license_duration_days' => ['label' => 'Masa aktif lisensi (hari)', 'min' => 0, 'default' => 30],
             'max_devices' => ['label' => 'Maks. perangkat', 'min' => 0, 'default' => 1],
             'max_events' => ['label' => 'Maks. event', 'min' => 0, 'default' => 0],
             'drive_quota_gb' => ['label' => 'Kuota Drive (GB)', 'min' => 0, 'default' => 0],
@@ -270,6 +297,7 @@ final class Plan
             'description' => '',
             'price' => '',
             'billing_period_days' => '30',
+            'license_duration_days' => '30',
             'max_devices' => '1',
             'max_events' => '0',
             'drive_quota_gb' => '0',
@@ -282,6 +310,7 @@ final class Plan
 
         $stringFields = [
             'name', 'slug', 'description', 'price', 'billing_period_days',
+            'license_duration_days',
             'max_devices', 'max_events', 'drive_quota_gb', 'session_quota',
             'retention_days', 'sort_order',
         ];
@@ -339,6 +368,7 @@ final class Plan
             'description' => $data['description'],
             'price' => $data['price'],
             'billing_period_days' => $data['billing_period_days'],
+            'license_duration_days' => $data['license_duration_days'],
             'max_devices' => $data['max_devices'],
             'max_events' => $data['max_events'],
             'drive_quota_gb' => $data['drive_quota_gb'],

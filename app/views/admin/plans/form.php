@@ -64,6 +64,13 @@ $err = static function (string $field) use ($errors): string {
                 <?= $err('billing_period_days') ?>
             </div>
             <div class="field">
+                <label for="license_duration_days">Masa Aktif Lisensi (hari)</label>
+                <input type="number" id="license_duration_days" name="license_duration_days" min="0" step="1" required
+                       value="<?= e((string) ($values['license_duration_days'] ?? '30')) ?>">
+                <div class="hint">Lisensi berlaku selama ini sejak diterbitkan atau diperpanjang. 0 = tanpa kedaluwarsa.</div>
+                <?= $err('license_duration_days') ?>
+            </div>
+            <div class="field">
                 <label for="max_devices">Maks. Perangkat (PC Booth)</label>
                 <input type="number" id="max_devices" name="max_devices" min="0" step="1" required
                        value="<?= e((string) ($values['max_devices'] ?? '1')) ?>">

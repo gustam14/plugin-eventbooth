@@ -26,10 +26,25 @@ $router = new Router();
  * Halaman publik
  * ------------------------------------------------------------------- */
 $router->get('/', static function (): void {
+    // Bagian paket di landing membaca plan aktif dari dashboard
+    // Super Admin. Bila database belum disetel ATAU query gagal
+    // (mis. tabel/kolom belum ada sebelum migrasi), landing
+    // menampilkan bagian paket statis contoh (lihat view).
+    $publicPlans = [];
+    $pdo = Database::pdo();
+    if ($pdo !== null) {
+        try {
+            $publicPlans = Plan::activePublic($pdo);
+        } catch (PDOException) {
+            $publicPlans = [];
+        }
+    }
+
     View::render('landing', [
         'appName' => Config::appName(),
         'appUrl' => Config::appUrl(),
         'version' => Config::appVersion(),
+        'plans' => $publicPlans,
     ]);
 });
 

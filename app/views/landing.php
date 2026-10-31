@@ -2,6 +2,8 @@
 /** @var string $appName */
 /** @var string $appUrl */
 /** @var string $version */
+/** @var array<int, array<string, mixed>> $plans Plan aktif dari dashboard; kosong = tampilkan paket statis contoh. */
+$plans = $plans ?? [];
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -413,6 +415,138 @@
         </div>
     </section>
 
+    <?php if ($plans !== []): ?>
+    <?php
+    // Bagian paket DINAMIS — dirender dari plan aktif yang diatur
+    // Super Admin. Teks publik hanya bicara soal album online.
+    $checkSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>';
+
+    // Harga ringkas gaya tampilan statis: Rp149rb / Rp349rb / Rp0.
+    $fmtPublicPrice = static function (float $price): string {
+        if ($price >= 1000 && fmod($price, 1000.0) === 0.0) {
+            return 'Rp' . number_format($price / 1000, 0, ',', '.') . 'rb';
+        }
+        return 'Rp' . number_format($price, 0, ',', '.');
+    };
+
+    // Akhiran periode di samping harga.
+    $publicSuffix = static function (array $plan): string {
+        if ((float) ($plan['price'] ?? 0) > 0) {
+            $days = (int) ($plan['billing_period_days'] ?? 30);
+            if ($days === 30) {
+                return '/ bulan';
+            }
+            if ($days === 365) {
+                return '/ tahun';
+            }
+            if ($days === 1) {
+                return '/ hari';
+            }
+            return '/ ' . number_format($days, 0, ',', '.') . ' hari';
+        }
+        $duration = (int) ($plan['license_duration_days'] ?? 0);
+        return $duration > 0
+            ? '/ ' . number_format($duration, 0, ',', '.') . ' hari'
+            : '/ tanpa batas';
+    };
+
+    $publicDesc = static function (array $plan): string {
+        $desc = trim((string) ($plan['description'] ?? ''));
+        // Deskripsi bawaan seed bersifat catatan internal ("Nilai
+        // contoh — ubah dari dashboard...") sehingga tidak layak
+        // tampil publik; pakai kalimat umum sampai Super Admin
+        // menulis deskripsi publiknya sendiri.
+        if ($desc !== '' && stripos($desc, 'nilai contoh') === false) {
+            return $desc;
+        }
+        return (float) ($plan['price'] ?? 0) > 0
+            ? 'Untuk booth reguler dengan pembayaran mandiri.'
+            : 'Untuk mencoba alur self-booth di event pertamamu.';
+    };
+
+    /** @return array<int, string> */
+    $publicBullets = static function (array $plan): array {
+        $bullets = [];
+
+        $maxDevices = (int) ($plan['max_devices'] ?? 0);
+        $bullets[] = $maxDevices > 0
+            ? number_format($maxDevices, 0, ',', '.') . ' perangkat PC booth'
+            : 'Perangkat PC booth tanpa batas';
+
+        $maxEvents = (int) ($plan['max_events'] ?? 0);
+        $bullets[] = $maxEvents > 0
+            ? 'Maks. ' . number_format($maxEvents, 0, ',', '.') . ' event aktif'
+            : 'Event tanpa batas';
+
+        $retention = (int) ($plan['retention_days'] ?? 0);
+        $bullets[] = $retention > 0
+            ? 'Retensi album hingga ' . number_format($retention, 0, ',', '.') . ' hari'
+            : 'Retensi album tanpa batas';
+
+        $sessionQuota = (int) ($plan['session_quota'] ?? 0);
+        if ($sessionQuota > 0) {
+            $bullets[] = 'Kuota ' . number_format($sessionQuota, 0, ',', '.') . ' sesi per periode';
+        }
+
+        $albumQuotaGb = (int) ($plan['drive_quota_gb'] ?? 0);
+        if ($albumQuotaGb > 0) {
+            $bullets[] = 'Kuota album ' . number_format($albumQuotaGb, 0, ',', '.') . ' GB';
+        }
+
+        $features = Plan::featuresOf($plan);
+        if (!empty($features['payment_lock'])) {
+            $bullets[] = 'Kunci pembayaran QRIS';
+        }
+        if (!empty($features['whatsapp_share'])) {
+            $bullets[] = 'Berbagi via WhatsApp';
+        }
+
+        return array_slice($bullets, 0, 6);
+    };
+
+    // Sorotan emas: plan aktif berharga tertinggi (> 0).
+    $featuredPlanId = null;
+    $highestPrice = 0.0;
+    foreach ($plans as $planRow) {
+        $rowPrice = (float) ($planRow['price'] ?? 0);
+        if ($rowPrice > $highestPrice) {
+            $highestPrice = $rowPrice;
+            $featuredPlanId = (int) ($planRow['id'] ?? 0);
+        }
+    }
+    ?>
+    <section class="block" id="paket">
+        <div class="wrap">
+            <div class="sec-head">
+                <span class="kicker">Paket Lisensi</span>
+                <h2>Pilih plan sesuai skala booth kamu</h2>
+                <p>Plan dan harga resmi yang berlaku saat ini, dikelola langsung dari dashboard Super Admin.</p>
+            </div>
+            <div class="pricing">
+                <?php foreach ($plans as $plan): ?>
+                    <?php
+                    $price = (float) ($plan['price'] ?? 0);
+                    $isFeatured = $featuredPlanId !== null && (int) ($plan['id'] ?? 0) === $featuredPlanId;
+                    ?>
+                    <article class="price-card<?= $isFeatured ? ' featured' : '' ?>">
+                        <?php if ($isFeatured): ?>
+                            <span class="price-badge">Paling Lengkap</span>
+                        <?php endif; ?>
+                        <span class="plan-name"><?= e((string) ($plan['name'] ?? '')) ?></span>
+                        <div class="price"><span class="amount"><?= e($fmtPublicPrice($price)) ?></span><span class="per"><?= e($publicSuffix($plan)) ?></span></div>
+                        <p class="plan-desc"><?= e($publicDesc($plan)) ?></p>
+                        <ul>
+                            <?php foreach ($publicBullets($plan) as $bullet): ?>
+                                <li><?= $checkSvg ?><?= e($bullet) ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                        <a class="btn <?= $isFeatured ? 'btn-primary' : 'btn-outline' ?>" href="/login"><?= $price <= 0 ? 'Mulai ' : 'Pilih ' ?><?= e((string) ($plan['name'] ?? '')) ?></a>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    </section>
+    <?php else: ?>
     <section class="block" id="paket">
         <div class="wrap">
             <div class="sec-head">
@@ -464,6 +598,7 @@
             <p class="pricing-note">Harga di atas adalah contoh tampilan. Plan dan harga resmi diatur dari dashboard Super Admin.</p>
         </div>
     </section>
+    <?php endif; ?>
 
     <section class="block">
         <div class="wrap">

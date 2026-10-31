@@ -36,6 +36,7 @@ $fmtQuota = static function ($value): string {
             <th>Nama</th>
             <th>Harga</th>
             <th>Periode</th>
+            <th>Masa Aktif</th>
             <th>Perangkat</th>
             <th>Event</th>
             <th>Kuota Drive</th>
@@ -55,6 +56,7 @@ $fmtQuota = static function ($value): string {
                 </td>
                 <td>Rp <?= number_format((float) $plan['price'], 0, ',', '.') ?></td>
                 <td><?= number_format((int) $plan['billing_period_days'], 0, ',', '.') ?> hari</td>
+                <td><?= (int) ($plan['license_duration_days'] ?? 0) === 0 ? 'Tanpa kedaluwarsa' : number_format((int) $plan['license_duration_days'], 0, ',', '.') . ' hari' ?></td>
                 <td><?= $fmtQuota($plan['max_devices']) ?></td>
                 <td><?= $fmtQuota($plan['max_events']) ?></td>
                 <td><?= (int) $plan['drive_quota_gb'] === 0 ? 'Tanpa batas' : number_format((int) $plan['drive_quota_gb'], 0, ',', '.') . ' GB' ?></td>
