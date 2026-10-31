@@ -269,6 +269,12 @@ memiliki baris lisensi sama sekali. Lisensi yang masa aktifnya
 habis — bahkan yang sudah **dicabut** — tidak diganti: Tambah
 Masa Aktif menghidupkannya kembali **dengan kunci yang sama**,
 jadi pembelian ulang tidak pernah menghasilkan lisensi baru.
+Khusus lisensi yang **dicabut**: sisa masa aktifnya hangus
+(keputusan pemilik, v0.6.4) — penghidupan kembali lewat Tambah
+Masa Aktif dihitung dari saat penambahan (sekarang + durasi
+plan), bukan dari tanggal berakhir sebelum pencabutan;
+perpanjangan lisensi yang tidak dicabut tetap dihitung dari
+sisa masa aktifnya.
 Lisensi yang berjalan hanya tumbuh dengan dua cara:
 **Tambah Masa Aktif** (di atas) dan **Tambah Perangkat**
 (`POST /admin/licenses/{id}/devices/add` →

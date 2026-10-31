@@ -43,6 +43,10 @@ declare(strict_types=1);
  *     sudah dicabut atau kedaluwarsa. Lisensi baru hanya terbit
  *     untuk tenant yang belum pernah memiliki baris lisensi sama
  *     sekali.
+ *   - Sisa masa aktif lisensi dicabut hangus (v0.6.4): pencabutan
+ *     menghanguskan sisa masa aktif — penghidupan kembali lewat
+ *     extendWithPlan dihitung dari saat penambahan, bukan dari
+ *     tanggal berakhir sebelum pencabutan.
  */
 final class License
 {
@@ -534,7 +538,13 @@ final class License
      *   - Plan berdurasi 0 -> expires_at NULL (tanpa kedaluwarsa).
      *   - Target yang expires_at-nya NULL (sudah permanen) TETAP
      *     permanen walau plan barunya berdurasi: lisensi permanen
-     *     tidak diam-diam berubah menjadi berbatas waktu.
+     *     tidak diam-diam berubah menjadi berbatas waktu —
+     *     KECUALI bila statusnya dicabut (butir berikut).
+     *   - Target yang statusnya DICABUT: sisa masa aktifnya HANGUS
+     *     (keputusan pemilik, v0.6.4) — basis selalu sekarang,
+     *     tanggal berakhir lama tidak dihitung, dan status
+     *     permanennya pun gugur (plan berdurasi membuatnya
+     *     berakhir sekarang + durasi plan).
      *   - Selain itu basis = expires_at target bila masih di masa
      *     depan, selain itu sekarang; hasil = basis + durasi plan.
      *
@@ -559,14 +569,22 @@ final class License
         }
 
         $duration = (int) ($plan['license_duration_days'] ?? 0);
+        $revoked = ($target['status'] ?? '') === 'revoked';
 
-        if (empty($target['expires_at'])) {
-            // Sudah permanen: tetap permanen (lihat docblock).
+        if ($duration === 0) {
+            // Plan tanpa kedaluwarsa: menjadi permanen.
             $expiresAt = null;
-        } elseif ($duration === 0) {
+        } elseif (empty($target['expires_at']) && !$revoked) {
+            // Sudah permanen dan tidak dicabut: tetap permanen
+            // (lihat docblock).
             $expiresAt = null;
         } else {
-            $baseTs = max(time(), (int) strtotime((string) $target['expires_at']));
+            // Lisensi dicabut: sisa masa aktif hangus, basis
+            // selalu sekarang (v0.6.4). Selain itu basis adalah
+            // expires_at target bila masih di masa depan.
+            $baseTs = $revoked
+                ? time()
+                : max(time(), (int) strtotime((string) $target['expires_at']));
             $expiresAt = date('Y-m-d H:i:s', $baseTs + $duration * 86400);
         }
 
