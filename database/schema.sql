@@ -364,9 +364,9 @@ CREATE TABLE app_settings (
 INSERT INTO plans
     (name, slug, description, price, billing_period_days, max_devices, max_events, drive_quota_gb, session_quota, retention_days, features, is_active, sort_order)
 VALUES
-    ('Trial', 'trial', 'Plan percobaan tenant baru. Nilai contoh — ubah dari dashboard Super Admin.', 0,       14, 1, 3,  15,  100,  30,  '{"payment_lock":true,"whatsapp_share":true,"gif":false}', 1, 1),
-    ('Basic', 'basic', 'Plan dasar untuk satu booth. Nilai contoh — ubah dari dashboard Super Admin.', 149000,  30, 1, 20, 50,  1000, 90,  '{"payment_lock":true,"whatsapp_share":true,"gif":true}',  1, 2),
-    ('Pro',   'pro',   'Plan pro untuk pemakaian intensif. Nilai contoh — ubah dari dashboard Super Admin.', 349000, 30, 3, 0, 200, 0,    365, '{"payment_lock":true,"whatsapp_share":true,"gif":true,"video":true}', 1, 3)
+    ('Trial', 'trial', 'Plan percobaan tenant baru. Nilai contoh — ubah dari dashboard Super Admin.', 0,       14, 1, 3,  15,  100,  30,  '{"payment_lock":true,"whatsapp_share":true}', 1, 1),
+    ('Basic', 'basic', 'Plan dasar untuk satu booth. Nilai contoh — ubah dari dashboard Super Admin.', 149000,  30, 1, 20, 50,  1000, 90,  '{"payment_lock":true,"whatsapp_share":true}',  1, 2),
+    ('Pro',   'pro',   'Plan pro untuk pemakaian intensif. Nilai contoh — ubah dari dashboard Super Admin.', 349000, 30, 3, 0, 200, 0,    365, '{"payment_lock":true,"whatsapp_share":true}', 1, 3)
 ON DUPLICATE KEY UPDATE
     name = VALUES(name), description = VALUES(description), price = VALUES(price),
     billing_period_days = VALUES(billing_period_days), max_devices = VALUES(max_devices),

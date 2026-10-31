@@ -328,7 +328,7 @@
                     </span>
                     <div class="foot-text">
                         <strong>Album sesi otomatis terbit</strong>
-                        <span>Pindai QR atau terima via WhatsApp — file tersimpan di Google Drive.</span>
+                        <span>Pindai QR atau terima via WhatsApp — foto langsung tampil di album online.</span>
                     </div>
                 </div>
             </div>
@@ -339,7 +339,7 @@
         <div class="wrap">
             <span>DSLRBooth v7 / v8</span>
             <span>Midtrans · QRIS</span>
-            <span>Google Drive</span>
+            <span>Album Online</span>
             <span>WhatsApp</span>
         </div>
     </div>
@@ -368,9 +368,9 @@
                     <p>Tamu membayar paket sesi lewat QRIS Midtrans dan sesi dimulai otomatis setelah pembayaran terverifikasi. Paket fleksibel: per sesi, per durasi, atau gabungan.</p>
                 </article>
                 <article class="feature">
-                    <span class="icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18.5a4.3 4.3 0 0 1-.5-8.56A5.6 5.6 0 0 1 17.3 8.6 4.4 4.4 0 0 1 17.5 18.5H7z"/><path d="M12 12.2v6M9.7 14.8 12 12.5l2.3 2.3"/></svg></span>
-                    <h3>Google Drive Pusat</h3>
-                    <p>File foto terunggah langsung dari PC booth ke Google Drive yang dikelola terpusat. Website hanya mencatat metadata, jadi server tetap ringan.</p>
+                    <span class="icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 3.5h10A2.3 2.3 0 0 1 20.8 5.8v9.7"/><rect x="3.2" y="7.2" width="14" height="13.3" rx="2.5"/><circle cx="7.4" cy="11.2" r="1.4"/><path d="M4.8 18.6 8.6 15.1l2.7 2.4 2-1.7 2.9 2.5"/></svg></span>
+                    <h3>Upload Otomatis</h3>
+                    <p>Hasil foto otomatis tampil di album online per event. Tamu cukup memindai kode QR untuk melihat dan mengunduh fotonya — tanpa perlu memasang aplikasi.</p>
                 </article>
                 <article class="feature">
                     <span class="icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10" width="15" height="10" rx="2.5"/><path d="M8 10V7.5a4 4 0 0 1 7.8-1.3"/><circle cx="12" cy="15" r="1.8"/></svg></span>
@@ -407,7 +407,7 @@
                 <article class="step">
                     <div class="step-num">03</div>
                     <h3>Foto Terbit di Album</h3>
-                    <p>Hasil sesi terunggah otomatis ke Google Drive dan muncul di album event. Tamu menerimanya lewat kode QR atau WhatsApp.</p>
+                    <p>Hasil sesi terunggah otomatis dan langsung muncul di album event online. Tamu menerimanya lewat kode QR atau WhatsApp.</p>
                 </article>
             </div>
         </div>
@@ -428,7 +428,7 @@
                     <ul>
                         <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>1 perangkat PC booth</li>
                         <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>Album event online</li>
-                        <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>Upload otomatis ke Google Drive</li>
+                        <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>Upload otomatis ke album online</li>
                         <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>Berlaku 14 hari</li>
                     </ul>
                     <a class="btn btn-outline" href="/login">Mulai Trial</a>
@@ -454,7 +454,7 @@
                     <ul>
                         <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>3 perangkat PC booth</li>
                         <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>Semua fitur Basic</li>
-                        <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>Dukungan GIF &amp; video</li>
+                        <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>Retensi album hingga 365 hari</li>
                         <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>Kuota sesi &amp; event lebih besar</li>
                         <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5 10 18 19.5 6.5"/></svg>Prioritas dukungan</li>
                     </ul>

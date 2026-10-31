@@ -14,15 +14,15 @@ declare(strict_types=1);
 final class Plan
 {
     /**
-     * Flag fitur yang dikenal, disimpan sebagai JSON di kolom
-     * `features`. Flag lain yang mungkin sudah ada di JSON (dari
-     * milestone berikutnya) dipertahankan apa adanya saat diubah.
+     * Flag fitur plan — HANYA kemampuan yang dikendalikan aplikasi
+     * pendamping ini, disimpan sebagai JSON di kolom `features`.
+     * GIF/Boomerang/Video adalah kemampuan DSLRBooth sendiri dan
+     * BUKAN flag plan. JSON yang tersimpan selalu berisi tepat
+     * kunci-kunci ini (flag asing dibuang saat plan disimpan).
      */
     public const FEATURE_FLAGS = [
         'payment_lock' => 'Kunci Pembayaran',
         'whatsapp_share' => 'Berbagi via WhatsApp',
-        'gif' => 'GIF / Boomerang',
-        'video' => 'Video',
     ];
 
     /** @return array<int, array<string, mixed>> Semua plan, urut tampilan. */
@@ -236,8 +236,8 @@ final class Plan
             $data[$field] = $value;
         }
 
-        // --- Fitur (checkbox) — flag asing dipertahankan -------------
-        $features = $existing !== null ? self::featuresOf($existing) : [];
+        // --- Fitur (checkbox) — tepat flag FEATURE_FLAGS saja --------
+        $features = [];
         $postedFeatures = $input['features'] ?? [];
         if (!is_array($postedFeatures)) {
             $postedFeatures = [];
