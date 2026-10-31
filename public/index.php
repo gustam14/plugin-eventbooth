@@ -7,6 +7,7 @@ declare(strict_types=1);
  *
  * Rute yang sudah hidup:
  *   GET  /            -> halaman landing                     (M1)
+ *   GET  /privacy     -> kebijakan privasi                   (halaman legal)
  *   GET  /api/health  -> status JSON                          (M1)
  *   GET|POST /login, POST /logout, GET /dashboard             (M2)
  *   GET  /admin, CRUD plan di /admin/plans                    (M2)
@@ -47,6 +48,17 @@ $router->get('/', static function (): void {
         'appUrl' => Config::appUrl(),
         'version' => Config::appVersion(),
         'plans' => $publicPlans,
+    ]);
+});
+
+// Halaman legal publik — URL kebijakan privasi juga didaftarkan
+// pada Google OAuth consent screen (Branding) proyek Cloud, jadi
+// rutenya tidak boleh berubah tanpa memperbarui pendaftaran itu.
+$router->get('/privacy', static function (): void {
+    View::render('legal/privacy', [
+        'appName' => Config::appName(),
+        'appUrl' => Config::appUrl(),
+        'version' => Config::appVersion(),
     ]);
 });
 
