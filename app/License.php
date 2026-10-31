@@ -466,6 +466,96 @@ final class License
         return $newExpires;
     }
 
+    /**
+     * Model masa aktif (keputusan pemilik, v0.6.1): pembelian plan
+     * oleh tenant memperpanjang lisensi yang SEDANG BERJALAN —
+     * bukan menerbitkan lisensi baru. Dipakai aksi Super Admin
+     * "Tambah Masa Aktif" dan kelak oleh checkout Midtrans.
+     *
+     * Pemilihan target:
+     *   (a) lisensi yang dipakai aplikasi booth saat ini
+     *       (currentForTenant()); bila tidak ada,
+     *   (b) lisensi tenant paling baru yang status tersimpannya
+     *       BUKAN 'revoked' — lisensi kedaluwarsa maupun
+     *       tersuspensi dihidupkan kembali oleh perpanjangan ini.
+     *   Bila keduanya kosong (tenant belum punya lisensi, atau
+     *   semua lisensinya sudah dicabut) hasil null — pemanggil
+     *   menerbitkan lisensi baru sebagai gantinya. Lisensi yang
+     *   dicabut TIDAK pernah menjadi target: pencabutan permanen.
+     *
+     * Masa aktif baru:
+     *   - Plan berdurasi 0 -> expires_at NULL (tanpa kedaluwarsa).
+     *   - Target yang expires_at-nya NULL (sudah permanen) TETAP
+     *     permanen walau plan barunya berdurasi: lisensi permanen
+     *     tidak diam-diam berubah menjadi berbatas waktu. Untuk
+     *     membatasinya, admin mencabut lisensi itu lalu menerbitkan
+     *     lisensi baru.
+     *   - Selain itu basis = expires_at target bila masih di masa
+     *     depan, selain itu sekarang; hasil = basis + durasi plan.
+     *
+     * Baris target diperbarui mengikuti plan yang dipilih:
+     * plan_id, snapshot plan (snapshotFromPlan), max_devices, dan
+     * status kembali 'active' (perpanjangan menghidupkan lisensi
+     * kedaluwarsa/tersuspensi). Kunci lisensi tidak berubah.
+     *
+     * @param array<string, mixed> $tenant Baris tenant.
+     * @param array<string, mixed> $plan   Baris plan aktif yang dibeli.
+     * @return array<string, mixed>|null Baris lisensi sesudah diperbarui.
+     */
+    public static function extendWithPlan(PDO $pdo, array $tenant, array $plan): ?array
+    {
+        $tenantId = (int) $tenant['id'];
+
+        $target = self::currentForTenant($pdo, $tenantId);
+        if ($target === null) {
+            // forTenant() terurut id DESC: baris bukan-revoked
+            // pertama adalah lisensi non-cabut paling baru.
+            foreach (self::forTenant($pdo, $tenantId) as $license) {
+                if ((string) ($license['status'] ?? '') !== 'revoked') {
+                    $target = $license;
+                    break;
+                }
+            }
+        }
+        if ($target === null) {
+            return null;
+        }
+
+        $duration = (int) ($plan['license_duration_days'] ?? 0);
+
+        if (empty($target['expires_at'])) {
+            // Sudah permanen: tetap permanen (lihat docblock).
+            $expiresAt = null;
+        } elseif ($duration === 0) {
+            $expiresAt = null;
+        } else {
+            $baseTs = max(time(), (int) strtotime((string) $target['expires_at']));
+            $expiresAt = date('Y-m-d H:i:s', $baseTs + $duration * 86400);
+        }
+
+        $stmt = $pdo->prepare(
+            'UPDATE licenses
+                SET plan_id = :plan_id,
+                    plan_snapshot = :snapshot,
+                    max_devices = :max_devices,
+                    expires_at = :expires_at,
+                    status = \'active\'
+              WHERE id = :id'
+        );
+        $stmt->execute([
+            'plan_id' => (int) $plan['id'],
+            'snapshot' => json_encode(
+                self::snapshotFromPlan($plan),
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+            ),
+            'max_devices' => (int) ($plan['max_devices'] ?? 1),
+            'expires_at' => $expiresAt,
+            'id' => (int) $target['id'],
+        ]);
+
+        return self::find($pdo, (int) $target['id']);
+    }
+
     public static function setStatus(PDO $pdo, int $id, string $status): void
     {
         if (!in_array($status, ['pending', 'active', 'suspended', 'revoked', 'expired'], true)) {

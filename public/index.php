@@ -18,6 +18,7 @@ declare(strict_types=1);
  *   GET  /admin/drive + OAuth Google Drive pusat              (M3)
  *   GET  /auth/google/callback -> callback OAuth Google       (M3)
  *   CRUD /admin/tenants + aksi lisensi /admin/licenses         (M4)
+ *   POST /admin/tenants/{id}/extend -> tambah masa aktif       (M4)
  *   POST /api/license/activate|validate -> API aplikasi booth  (M4)
  *   POST /api/app/login|me|logout -> sesi aplikasi via akun     (M4c)
  *   POST cabut perangkat: /tenant/licenses/... & /admin/...    (M4c)
@@ -1276,6 +1277,64 @@ $router->post('/admin/tenants/{id}/licenses', static function (array $params): v
     $_SESSION['new_license_key'] = $issued['key'];
 
     Flash::success('Lisensi plan "' . (string) $plan['name'] . '" berhasil diterbitkan untuk ' . Tenant::displayName($tenant) . '.');
+    redirect('/admin/tenants/' . $id);
+});
+
+$router->post('/admin/tenants/{id}/extend', static function (array $params): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, masa aktif belum dapat ditambah.');
+        redirect('/admin');
+    }
+
+    $id = (int) ($params['id'] ?? 0);
+    $tenant = Tenant::find($pdo, $id);
+    if ($tenant === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $plan = Plan::find($pdo, (int) ($_POST['plan_id'] ?? 0));
+    if ($plan === null || (int) ($plan['is_active'] ?? 0) !== 1) {
+        Flash::error('Plan yang dipilih tidak ditemukan atau sedang nonaktif.');
+        redirect('/admin/tenants/' . $id);
+    }
+
+    $vendor = Tenant::displayName($tenant);
+
+    try {
+        // Model masa aktif: pembelian plan memperpanjang lisensi
+        // yang berjalan; lisensi baru hanya terbit bila memang
+        // belum ada lisensi yang bisa diperpanjang.
+        $extended = License::extendWithPlan($pdo, $tenant, $plan);
+        if ($extended !== null) {
+            $until = empty($extended['expires_at'])
+                ? 'tanpa kedaluwarsa'
+                : License::formatDateId((string) $extended['expires_at']);
+            Flash::success('Masa aktif ' . $vendor . ' diperpanjang dengan plan ' . (string) $plan['name'] . ' — berlaku hingga ' . $until . '.');
+            redirect('/admin/tenants/' . $id);
+        }
+
+        $issued = License::issue($pdo, $id, $plan, (int) $user['id']);
+    } catch (PDOException) {
+        Flash::error('Masa aktif gagal ditambah. Pastikan migrasi Milestone 4 sudah dijalankan, lalu coba lagi.');
+        redirect('/admin/tenants/' . $id);
+    } catch (RuntimeException) {
+        Flash::error('Masa aktif gagal ditambah. Silakan coba lagi.');
+        redirect('/admin/tenants/' . $id);
+    }
+
+    // Sama seperti penerbitan biasa: kunci tampil sekali.
+    Auth::start();
+    $_SESSION['new_license_key'] = $issued['key'];
+
+    Flash::success('Lisensi baru diterbitkan untuk ' . $vendor . ' dengan plan ' . (string) $plan['name'] . ' (belum ada lisensi yang bisa diperpanjang).');
     redirect('/admin/tenants/' . $id);
 });
 

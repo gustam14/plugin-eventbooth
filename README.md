@@ -236,6 +236,30 @@ M4/M4b: `database/migrations/2026-10-31-m4c-device-token.sql`.
 Jalur kunci (`/api/license/activate|validate`) tetap hidup
 sebagai cadangan dan tidak terpengaruh migrasi ini.
 
+**Model masa aktif (v0.6.1) — pembelian ulang = perpanjangan:**
+penekanan lisensi ada di **masa aktifnya**, bukan pada jumlah
+lisensinya. Saat tenant membeli plan lagi, yang bertambah adalah
+masa aktif lisensi yang sedang berjalan — **bukan** lisensi baru.
+Super Admin menjalankannya dari kartu **Tambah Masa Aktif** di
+detail tenant (`POST /admin/tenants/{id}/extend` →
+`License::extendWithPlan`): targetnya adalah lisensi yang dipakai
+aplikasi (`currentForTenant`); bila tidak ada yang aktif, lisensi
+terbaru yang belum dicabut dihidupkan kembali (termasuk yang sudah
+kedaluwarsa atau tersuspensi, yang statusnya kembali `active`).
+Bila plan yang dibeli berbeda, batas & fitur lisensi beralih
+mengikuti plan terbaru (snapshot plan + `max_devices` diperbarui)
+dan masa aktif ditambah sesuai durasi plan itu: basisnya sisa masa
+aktif bila belum habis, atau hari ini bila sudah habis; plan
+berdurasi 0 menjadikan lisensi tanpa kedaluwarsa. Lisensi yang
+sudah **dicabut** tidak pernah menjadi target perpanjangan, dan
+lisensi yang sudah permanen (tanpa kedaluwarsa) tetap permanen —
+untuk membatasinya admin mencabutnya lalu menerbitkan lisensi
+baru. Bila tenant belum memiliki lisensi yang bisa diperpanjang
+sama sekali, aksi Tambah Masa Aktif menerbitkan lisensi baru.
+Formulir **Terbitkan Lisensi Baru** tetap tersedia untuk lisensi
+kedua yang berjalan bersamaan atau sesudah pencabutan. Aturan yang
+sama akan berlaku untuk checkout Midtrans di milestone pembayaran.
+
 ## Roadmap milestone
 
 - **M1 — Fondasi (selesai):** scaffold ini — router, konfigurasi

@@ -147,11 +147,44 @@ $roleLabel = static function (string $role): string {
 <div class="panel-box">
     <h2 style="font-size: 16.5px; font-weight: 700; margin-bottom: 14px;">Lisensi</h2>
 
+    <div style="border: 1px solid rgba(201, 162, 75, .35); background: rgba(201, 162, 75, .05); border-radius: 14px; padding: 16px; margin-bottom: 22px;">
+        <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 6px;">Tambah Masa Aktif</h3>
+        <p class="hint" style="margin-bottom: 12px;">
+            Membeli/menambah plan memperpanjang lisensi yang berjalan — bukan membuat
+            lisensi baru. Bila plan berbeda, batas &amp; fitur lisensi mengikuti plan
+            yang dipilih.
+        </p>
+        <form method="post" action="/admin/tenants/<?= $tenantId ?>/extend">
+            <?= Auth::csrfField() ?>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+                <div class="field" style="flex: 1 1 260px; margin-bottom: 0;">
+                    <label for="extend_plan_id">Plan yang dibeli / ditambahkan</label>
+                    <select id="extend_plan_id" name="plan_id">
+                        <?php foreach (($activePlans ?? []) as $plan): ?>
+                            <option value="<?= (int) $plan['id'] ?>">
+                                <?= e((string) $plan['name']) ?>
+                                (<?= (int) ($plan['license_duration_days'] ?? 0) === 0
+                                    ? 'tanpa kedaluwarsa'
+                                    : (int) $plan['license_duration_days'] . ' hari' ?>)
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <button class="btn btn-primary" type="submit"
+                    <?= ($activePlans ?? []) === [] ? 'disabled' : '' ?>>Tambah Masa Aktif</button>
+            </div>
+            <?php if (($activePlans ?? []) === []): ?>
+                <div class="hint" style="margin-top: 8px;">Tidak ada plan aktif. Aktifkan plan dulu di menu Plan Lisensi.</div>
+            <?php endif; ?>
+        </form>
+    </div>
+
+    <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 8px;">Terbitkan Lisensi Baru</h3>
     <form method="post" action="/admin/tenants/<?= $tenantId ?>/licenses" style="margin-bottom: 20px;">
         <?= Auth::csrfField() ?>
         <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
             <div class="field" style="flex: 1 1 260px; margin-bottom: 0;">
-                <label for="plan_id">Plan untuk lisensi baru</label>
+                <label for="plan_id">Plan</label>
                 <select id="plan_id" name="plan_id">
                     <?php foreach (($activePlans ?? []) as $plan): ?>
                         <option value="<?= (int) $plan['id'] ?>">
