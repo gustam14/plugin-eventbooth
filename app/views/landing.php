@@ -647,7 +647,7 @@ $plans = $plans ?? [];
             </span>
             <span class="brandmark-text">Plugin <span class="accent">Eventbooth</span></span>
         </div>
-        <p>&copy; <?= date('Y') ?> <?= e($appName) ?> · Bagian dari EventBooth · <a href="/privacy">Kebijakan Privasi</a> · <span title="Versi aplikasi">v<?= e($version) ?></span></p>
+        <p>&copy; <?= date('Y') ?> <?= e($appName) ?> · Bagian dari EventBooth · <a href="/privacy">Kebijakan Privasi</a> · <a href="/terms">Syarat Layanan</a> · <span title="Versi aplikasi">v<?= e($version) ?></span></p>
     </div>
 </footer>
 
