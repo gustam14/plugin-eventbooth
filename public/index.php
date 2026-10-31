@@ -14,6 +14,7 @@ declare(strict_types=1);
  *   GET  /admin, CRUD plan di /admin/plans                    (M2)
  *   GET  /tenant                                              (M2)
  *   GET  /tenant/licenses -> lisensi milik tenant             (M4)
+ *   GET  /tenant/devices -> perangkat terhubung tenant        (M4c)
  *   GET|POST /account/password -> ganti kata sandi            (M2.1)
  *   GET  /admin/drive + OAuth Google Drive pusat              (M3)
  *   GET  /auth/google/callback -> callback OAuth Google       (M3)
@@ -1059,8 +1060,9 @@ $router->get('/admin/tenants/{id}', static function (array $params): void {
 
         $tenantUsers = Tenant::usersOf($pdo, $id);
         $licenses = License::forTenant($pdo, $id);
-        // Satu akun satu lisensi (v0.6.2): formulir penerbitan
-        // hanya tampil bila tenant belum punya lisensi hidup.
+        // Satu akun satu lisensi (v0.6.2; lisensi abadi v0.6.3):
+        // formulir penerbitan hanya tampil bila tenant belum
+        // pernah punya lisensi sama sekali.
         $liveLicense = License::liveForTenant($pdo, $id);
         $devicesByLicense = [];
         foreach ($licenses as $licenseRow) {
@@ -1260,17 +1262,19 @@ $router->post('/admin/tenants/{id}/licenses', static function (array $params): v
         return;
     }
 
-    // Satu akun hanya memiliki satu lisensi (v0.6.2): selama
-    // tenant masih punya lisensi yang belum dicabut, penerbitan
-    // lisensi tambahan ditolak — pertumbuhan lisensi berjalan
-    // hanya lewat Tambah Masa Aktif / Tambah Perangkat.
+    // Satu akun hanya memiliki satu lisensi (v0.6.2) dan lisensi
+    // itu abadi (v0.6.3): selama tenant sudah pernah punya baris
+    // lisensi — dalam keadaan apa pun, termasuk dicabut —
+    // penerbitan lisensi tambahan ditolak; pembelian berikutnya
+    // berjalan lewat Tambah Masa Aktif yang menghidupkan kembali
+    // lisensi lama dengan kunci yang sama.
     try {
         $liveLicense = License::liveForTenant($pdo, $id);
     } catch (PDOException) {
         $liveLicense = null;
     }
     if ($liveLicense !== null) {
-        Flash::error('Tenant ini sudah memiliki lisensi. Satu akun hanya memiliki satu lisensi — gunakan Tambah Masa Aktif atau Tambah Perangkat.');
+        Flash::error('Tenant ini sudah memiliki lisensi. Gunakan Tambah Masa Aktif — lisensi lama akan dipakai lagi, termasuk yang dicabut atau kedaluwarsa.');
         redirect('/admin/tenants/' . $id);
     }
 
@@ -1328,15 +1332,26 @@ $router->post('/admin/tenants/{id}/extend', static function (array $params): voi
     $vendor = Tenant::displayName($tenant);
 
     try {
-        // Model masa aktif: pembelian plan memperpanjang lisensi
-        // yang berjalan; lisensi baru hanya terbit bila memang
-        // belum ada lisensi yang bisa diperpanjang.
+        // Model masa aktif + lisensi abadi (v0.6.3): pembelian plan
+        // memperpanjang / menghidupkan kembali satu-satunya lisensi
+        // tenant; lisensi baru hanya terbit bila tenant belum
+        // pernah memiliki lisensi sama sekali. Keadaan target
+        // SEBELUM perpanjangan dibaca lebih dulu untuk menentukan
+        // bunyi pesannya (dicabut = diaktifkan kembali).
+        $target = License::liveForTenant($pdo, $id);
+        $wasRevoked = $target !== null
+            && (string) ($target['status'] ?? '') === 'revoked';
+
         $extended = License::extendWithPlan($pdo, $tenant, $plan);
         if ($extended !== null) {
             $until = empty($extended['expires_at'])
                 ? 'tanpa kedaluwarsa'
                 : License::formatDateId((string) $extended['expires_at']);
-            Flash::success('Masa aktif ' . $vendor . ' diperpanjang dengan plan ' . (string) $plan['name'] . ' — berlaku hingga ' . $until . '.');
+            if ($wasRevoked) {
+                Flash::success('Lisensi lama milik ' . $vendor . ' diaktifkan kembali dengan plan ' . (string) $plan['name'] . ' — berlaku hingga ' . $until . '.');
+            } else {
+                Flash::success('Masa aktif ' . $vendor . ' diperpanjang dengan plan ' . (string) $plan['name'] . ' — berlaku hingga ' . $until . '.');
+            }
             redirect('/admin/tenants/' . $id);
         }
 
@@ -1353,7 +1368,7 @@ $router->post('/admin/tenants/{id}/extend', static function (array $params): voi
     Auth::start();
     $_SESSION['new_license_key'] = $issued['key'];
 
-    Flash::success('Lisensi baru diterbitkan untuk ' . $vendor . ' dengan plan ' . (string) $plan['name'] . ' (belum ada lisensi yang bisa diperpanjang).');
+    Flash::success('Lisensi baru diterbitkan untuk ' . $vendor . ' dengan plan ' . (string) $plan['name'] . ' (tenant belum memiliki lisensi).');
     redirect('/admin/tenants/' . $id);
 });
 
@@ -1700,19 +1715,68 @@ $router->get('/tenant/licenses', static function (): void {
 });
 
 /**
+ * Perangkat terhubung milik tenant yang login (Milestone 4c;
+ * halaman tersendiri sejak v0.6.3): daftar perangkat dari
+ * satu-satunya lisensi tenant. Lisensi dipilih dengan aturan
+ * liveForTenant (keadaan apa pun — termasuk dicabut/kedaluwarsa)
+ * agar perangkatnya tetap terlihat. Pencabutan memakai rute
+ * revoke yang sama dengan halaman Lisensi Saya, dengan field
+ * 'return' = 'devices' agar pengguna kembali ke halaman ini.
+ */
+$router->get('/tenant/devices', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $license = null;
+    $devices = [];
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $license = License::liveForTenant($pdo, (int) $tenantId);
+            if ($license !== null) {
+                try {
+                    $devices = License::devicesFor($pdo, (int) $license['id']);
+                } catch (PDOException) {
+                    $devices = [];
+                }
+            }
+        } catch (PDOException) {
+            // Halaman tetap tampil dengan keadaan kosong.
+            $license = null;
+            $devices = [];
+        }
+    }
+
+    View::render('tenant/devices', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'license' => $license,
+        'devices' => $devices,
+    ]);
+});
+
+/**
  * Cabut perangkat dari dashboard tenant (Milestone 4c): slot
  * perangkat lisensi langsung bebas lagi. Lisensi WAJIB milik
  * tenant pengguna yang login dan perangkat wajib milik lisensi
- * itu — keduanya diverifikasi sebelum pencabutan.
+ * itu — keduanya diverifikasi sebelum pencabutan. Pengguna
+ * dikembalikan ke halaman asalnya: field POST 'return' =
+ * 'devices' (dari halaman Perangkat, v0.6.3) menuju
+ * /tenant/devices; selain itu ke /tenant/licenses.
  */
 $router->post('/tenant/licenses/{licenseId}/devices/{deviceId}/revoke', static function (array $params): void {
     $user = Auth::requireRole('tenant_admin', 'tenant_staff');
     Auth::requireCsrf();
 
+    $backUrl = (string) ($_POST['return'] ?? '') === 'devices'
+        ? '/tenant/devices'
+        : '/tenant/licenses';
+
     $pdo = Database::pdo();
     if ($pdo === null) {
         Flash::error('Database belum disetel, perangkat belum dapat dicabut.');
-        redirect('/tenant/licenses');
+        redirect($backUrl);
     }
 
     $licenseId = (int) ($params['licenseId'] ?? 0);
@@ -1732,16 +1796,16 @@ $router->post('/tenant/licenses/{licenseId}/devices/{deviceId}/revoke', static f
         $revoked = License::revokeDevice($pdo, $licenseId, $deviceRowId);
     } catch (PDOException) {
         Flash::error('Perangkat gagal dicabut. Pastikan migrasi Milestone 4c (database/migrations/2026-10-31-m4c-device-token.sql) sudah dijalankan.');
-        redirect('/tenant/licenses');
+        redirect($backUrl);
     }
 
     if (!$revoked) {
         Flash::error('Perangkat tidak ditemukan pada lisensi ini.');
-        redirect('/tenant/licenses');
+        redirect($backUrl);
     }
 
     Flash::success('Perangkat dicabut — slot tersedia lagi.');
-    redirect('/tenant/licenses');
+    redirect($backUrl);
 });
 
 /* ---------------------------------------------------------------------

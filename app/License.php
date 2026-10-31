@@ -33,10 +33,16 @@ declare(strict_types=1);
  *     (migrasi M4c). Jalur kunci (activate/validate) tetap hidup
  *     sebagai cadangan.
  *   - Satu akun, satu lisensi (v0.6.2): tenant hanya boleh punya
- *     SATU lisensi yang belum dicabut (liveForTenant()); penerbitan
- *     lisensi tambahan ditolak. Lisensi yang berjalan hanya tumbuh
- *     lewat perpanjangan masa aktif (extendWithPlan) dan penambahan
+ *     SATU lisensi (liveForTenant()); penerbitan lisensi tambahan
+ *     ditolak. Lisensi yang berjalan hanya tumbuh lewat
+ *     perpanjangan masa aktif (extendWithPlan) dan penambahan
  *     batas perangkat (addDevices).
+ *   - Lisensi abadi (v0.6.3): lisensi tenant tidak pernah diganti —
+ *     pembelian ulang / Tambah Masa Aktif menghidupkan kembali
+ *     lisensi yang sama dengan kunci yang sama, termasuk yang
+ *     sudah dicabut atau kedaluwarsa. Lisensi baru hanya terbit
+ *     untuk tenant yang belum pernah memiliki baris lisensi sama
+ *     sekali.
  */
 final class License
 {
@@ -188,15 +194,21 @@ final class License
     }
 
     /**
-     * "Lisensi hidup" milik tenant (aturan satu akun satu lisensi,
-     * v0.6.2): lisensi yang status TERsimpannya bukan 'revoked'.
-     * Bila ada lisensi yang sedang dipakai aplikasi, itulah
-     * hasilnya (currentForTenant()); bila tidak ada yang aktif,
-     * lisensi bukan-revoked paling baru yang menang — mencakup
-     * lisensi kedaluwarsa/tersuspensi yang masih bisa dihidupkan
-     * lewat Tambah Masa Aktif. Null bila tenant belum punya
-     * lisensi sama sekali atau semua lisensinya sudah dicabut —
-     * hanya dalam keadaan itu lisensi baru boleh diterbitkan.
+     * Satu-satunya lisensi milik tenant — "lisensi hidup" dalam
+     * aturan satu akun satu lisensi (v0.6.2), diperluas v0.6.3
+     * menjadi lisensi ABADI: yang dikembalikan adalah lisensi
+     * tenant dalam keadaan apa pun. Bila ada lisensi yang sedang
+     * dipakai aplikasi, itulah hasilnya (currentForTenant()); bila
+     * tidak ada yang aktif, baris lisensi PALING BARU tenant yang
+     * menang — apa pun status tersimpannya, termasuk 'revoked' —
+     * karena lisensi itulah yang dihidupkan kembali oleh Tambah
+     * Masa Aktif (extendWithPlan) dengan kunci yang sama. Null
+     * HANYA bila tenant belum pernah memiliki baris lisensi sama
+     * sekali; hanya dalam keadaan itu lisensi baru boleh terbit.
+     *
+     * Pemakai: formulir penerbitan di detail tenant (tampil hanya
+     * bila null), penjaga rute penerbitan, target extendWithPlan,
+     * dan halaman Perangkat di dashboard tenant.
      *
      * @return array<string, mixed>|null Baris lisensi (+ plan_name & device_count).
      */
@@ -207,15 +219,11 @@ final class License
             return $current;
         }
 
-        // forTenant() terurut id DESC: baris bukan-revoked pertama
-        // adalah lisensi non-cabut paling baru.
-        foreach (self::forTenant($pdo, $tenantId) as $license) {
-            if ((string) ($license['status'] ?? '') !== 'revoked') {
-                return $license;
-            }
-        }
+        // forTenant() terurut id DESC: baris pertama adalah lisensi
+        // tenant paling baru, apa pun status tersimpannya.
+        $licenses = self::forTenant($pdo, $tenantId);
 
-        return null;
+        return $licenses[0] ?? null;
     }
 
     /**
@@ -508,31 +516,32 @@ final class License
      * bukan menerbitkan lisensi baru. Dipakai aksi Super Admin
      * "Tambah Masa Aktif" dan kelak oleh checkout Midtrans.
      *
-     * Pemilihan target:
+     * Pemilihan target: satu-satunya lisensi tenant menurut
+     * liveForTenant() —
      *   (a) lisensi yang dipakai aplikasi booth saat ini
      *       (currentForTenant()); bila tidak ada,
-     *   (b) lisensi tenant paling baru yang status tersimpannya
-     *       BUKAN 'revoked' — lisensi kedaluwarsa maupun
-     *       tersuspensi dihidupkan kembali oleh perpanjangan ini.
-     *   Bila keduanya kosong (tenant belum punya lisensi, atau
-     *   semua lisensinya sudah dicabut) hasil null — pemanggil
-     *   menerbitkan lisensi baru sebagai gantinya. Lisensi yang
-     *   dicabut TIDAK pernah menjadi target: pencabutan permanen.
+     *   (b) baris lisensi tenant paling baru, apa pun status
+     *       tersimpannya: lisensi kedaluwarsa, tersuspensi, bahkan
+     *       yang sudah DICABUT dihidupkan kembali oleh
+     *       perpanjangan ini (lisensi abadi, v0.6.3) dengan kunci
+     *       yang sama — perpanjangan tidak pernah menerbitkan
+     *       lisensi baru.
+     *   Hasil null HANYA bila tenant belum pernah memiliki baris
+     *   lisensi sama sekali — pemanggil menerbitkan lisensi
+     *   pertamanya sebagai gantinya.
      *
      * Masa aktif baru:
      *   - Plan berdurasi 0 -> expires_at NULL (tanpa kedaluwarsa).
      *   - Target yang expires_at-nya NULL (sudah permanen) TETAP
      *     permanen walau plan barunya berdurasi: lisensi permanen
-     *     tidak diam-diam berubah menjadi berbatas waktu. Untuk
-     *     membatasinya, admin mencabut lisensi itu lalu menerbitkan
-     *     lisensi baru.
+     *     tidak diam-diam berubah menjadi berbatas waktu.
      *   - Selain itu basis = expires_at target bila masih di masa
      *     depan, selain itu sekarang; hasil = basis + durasi plan.
      *
      * Baris target diperbarui mengikuti plan yang dipilih:
      * plan_id, snapshot plan (snapshotFromPlan), max_devices, dan
      * status kembali 'active' (perpanjangan menghidupkan lisensi
-     * kedaluwarsa/tersuspensi). Kunci lisensi tidak berubah.
+     * kedaluwarsa/tersuspensi/dicabut). Kunci lisensi tidak berubah.
      *
      * @param array<string, mixed> $tenant Baris tenant.
      * @param array<string, mixed> $plan   Baris plan aktif yang dibeli.

@@ -9,7 +9,7 @@
  * @var array<string, mixed> $tenant Baris tenant.
  * @var array<int, array<string, mixed>> $tenantUsers Baris users milik tenant.
  * @var array<int, array<string, mixed>> $licenses Baris licenses + plan_name & device_count.
- * @var array<string, mixed>|null $liveLicense Lisensi hidup tenant (belum dicabut), bila ada (v0.6.2).
+ * @var array<string, mixed>|null $liveLicense Satu-satunya lisensi tenant dalam keadaan apa pun (liveForTenant); null hanya bila tenant belum pernah punya lisensi (v0.6.3).
  * @var array<int, array<int, array<string, mixed>>> $devicesByLicense Baris perangkat per ID lisensi (M4c).
  * @var array<int, array<string, mixed>> $activePlans Plan aktif untuk formulir penerbitan.
  * @var string|null $newKey Kunci lisensi yang BARU diterbitkan (tampil satu kali).
@@ -182,9 +182,9 @@ $roleLabel = static function (string $role): string {
 
     <?php if (($liveLicense ?? null) !== null): ?>
         <p class="hint" style="margin-bottom: 20px;">
-            Satu akun hanya memiliki satu lisensi. Untuk memperpanjang gunakan
-            Tambah Masa Aktif; untuk menambah batas perangkat gunakan Tambah
-            Perangkat pada lisensi.
+            Satu akun hanya memiliki satu lisensi. Lisensi yang masa aktifnya
+            habis atau dicabut akan diaktifkan kembali lewat Tambah Masa Aktif —
+            tidak diterbitkan lisensi baru.
         </p>
     <?php else: ?>
     <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 8px;">Terbitkan Lisensi Baru</h3>

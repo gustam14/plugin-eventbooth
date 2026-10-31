@@ -244,31 +244,32 @@ Super Admin menjalankannya dari kartu **Tambah Masa Aktif** di
 detail tenant (`POST /admin/tenants/{id}/extend` →
 `License::extendWithPlan`): targetnya adalah lisensi yang dipakai
 aplikasi (`currentForTenant`); bila tidak ada yang aktif, lisensi
-terbaru yang belum dicabut dihidupkan kembali (termasuk yang sudah
-kedaluwarsa atau tersuspensi, yang statusnya kembali `active`).
+terbaru dihidupkan kembali (termasuk yang sudah kedaluwarsa atau
+tersuspensi — dan sejak v0.6.3 juga yang sudah dicabut — yang
+statusnya kembali `active`, dengan kunci yang sama).
 Bila plan yang dibeli berbeda, batas & fitur lisensi beralih
 mengikuti plan terbaru (snapshot plan + `max_devices` diperbarui)
 dan masa aktif ditambah sesuai durasi plan itu: basisnya sisa masa
 aktif bila belum habis, atau hari ini bila sudah habis; plan
 berdurasi 0 menjadikan lisensi tanpa kedaluwarsa. Lisensi yang
-sudah **dicabut** tidak pernah menjadi target perpanjangan, dan
-lisensi yang sudah permanen (tanpa kedaluwarsa) tetap permanen —
-untuk membatasinya admin mencabutnya lalu menerbitkan lisensi
-baru. Bila tenant belum memiliki lisensi yang bisa diperpanjang
-sama sekali, aksi Tambah Masa Aktif menerbitkan lisensi baru.
-Formulir **Terbitkan Lisensi Baru** tetap tersedia untuk lisensi
-kedua yang berjalan bersamaan atau sesudah pencabutan. Aturan yang
-sama akan berlaku untuk checkout Midtrans di milestone pembayaran.
+sudah permanen (tanpa kedaluwarsa) tetap permanen. Bila tenant
+belum pernah memiliki lisensi sama sekali, aksi Tambah Masa
+Aktif menerbitkan lisensi pertamanya. Aturan yang sama akan
+berlaku untuk checkout Midtrans di milestone pembayaran.
 
-**Satu akun, satu lisensi (v0.6.2):** keputusan pemilik setelah
-menguji dashboard — satu akun tenant hanya boleh memiliki **satu**
-lisensi yang belum dicabut (`License::liveForTenant`). Selama
-lisensi hidup itu ada, formulir **Terbitkan Lisensi Baru** di
-detail tenant digantikan catatan satu baris, dan rute
-penerbitannya (`POST /admin/tenants/{id}/licenses`) pun menolak
-dengan pesan galat — lisensi baru hanya bisa terbit bila tenant
-belum punya lisensi sama sekali atau semua lisensinya sudah
-dicabut. Lisensi yang berjalan hanya tumbuh dengan dua cara:
+**Satu akun, satu lisensi (v0.6.2) & lisensi abadi (v0.6.3):**
+keputusan pemilik setelah menguji dashboard — satu akun tenant
+hanya boleh memiliki **satu** lisensi (`License::liveForTenant` —
+lisensi terbaru tenant dalam keadaan apa pun). Selama lisensi
+itu ada, formulir **Terbitkan Lisensi Baru** di detail tenant
+digantikan catatan satu baris, dan rute penerbitannya
+(`POST /admin/tenants/{id}/licenses`) pun menolak dengan pesan
+galat — lisensi baru hanya bisa terbit bila tenant belum pernah
+memiliki baris lisensi sama sekali. Lisensi yang masa aktifnya
+habis — bahkan yang sudah **dicabut** — tidak diganti: Tambah
+Masa Aktif menghidupkannya kembali **dengan kunci yang sama**,
+jadi pembelian ulang tidak pernah menghasilkan lisensi baru.
+Lisensi yang berjalan hanya tumbuh dengan dua cara:
 **Tambah Masa Aktif** (di atas) dan **Tambah Perangkat**
 (`POST /admin/licenses/{id}/devices/add` →
 `License::addDevices`, +1..20 perangkat per aksi) yang menaikkan
@@ -279,10 +280,14 @@ Tombol **Perpanjang** per lisensi dicabut dari tabel karena
 perpanjangan kini terpusat di kartu Tambah Masa Aktif (rute renew
 lama masih terdaftar tetapi tidak lagi ditautkan dari dashboard).
 Tenant lama yang datanya telanjur berisi banyak lisensi tetap
-tampil semua sebagai riwayat; yang dicabut tidak bisa diubah
-lagi, dan satu-satunya lisensi hidupnya adalah tempat Tambah Masa
-Aktif/Tambah Perangkat bekerja — untuk menggantinya, cabut dulu
-lisensi hidup itu, lalu terbitkan yang baru.
+tampil semua sebagai riwayat; Tambah Masa Aktif/Tambah Perangkat
+bekerja pada lisensi terbarunya (yang sedang dipakai aplikasi
+bila ada yang aktif), dan lisensi yang dicabut dihidupkan
+kembali lewat Tambah Masa Aktif — bukan diganti. Dashboard
+tenant juga punya halaman **Perangkat** (`GET /tenant/devices`,
+v0.6.3) yang memuat daftar perangkat dari satu-satunya lisensi
+tenant lengkap dengan tombol **Cabut Perangkat**; daftar
+tertanam di halaman Lisensi Saya tetap ada.
 
 ## Roadmap milestone
 
