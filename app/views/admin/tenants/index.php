@@ -9,6 +9,7 @@
  * @var string $query Kata pencarian aktif.
  * @var bool $automationTokenSet Token otomasi pengingat sudah diatur.
  * @var string|null $automationTokenOnce Token BARU yang ditampilkan satu kali (baru dibuat ulang).
+ * @var string|null $automationSender Nomor pengirim MPWA tersimpan (ternormalisasi 62…) atau null.
  */
 
 $title = 'Tenant & Lisensi';
@@ -54,6 +55,21 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
           onsubmit="return confirm('Membuat token baru akan menonaktifkan token lama. Lanjutkan?');">
         <?= Auth::csrfField() ?>
         <button class="btn btn-small" type="submit"><?= ($automationTokenSet ?? false) ? 'Buat Ulang Token' : 'Buat Token Otomasi' ?></button>
+    </form>
+
+    <form method="post" action="/admin/automation/sender" style="margin-top: 20px; max-width: 420px;">
+        <?= Auth::csrfField() ?>
+        <label for="mpwa_sender">Nomor Pengirim WhatsApp (MPWA)</label>
+        <input type="text" id="mpwa_sender" name="mpwa_sender" maxlength="32"
+               value="<?= e((string) ($automationSender ?? '')) ?>"
+               placeholder="62812xxxxxxxx">
+        <p class="hint" style="margin: 6px 0 10px;">
+            Nomor perangkat MPWA yang mengirim pengingat kedaluwarsa
+            ke tenant. Workflow n8n mengambil nomor ini otomatis
+            setiap berjalan — ganti di sini saja, tidak perlu
+            mengubah workflow.
+        </p>
+        <button class="btn btn-small" type="submit">Simpan Nomor Pengirim</button>
     </form>
 </div>
 

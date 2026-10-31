@@ -188,6 +188,12 @@ Admin mengelola pembeli lisensi dan lisensinya:
   n8n membaca daftar ambang 7/3/1 hari, mengirim WhatsApp lewat
   MPWA, lalu mencatat pengiriman — pengirimannya sendiri berada
   di n8n karena kredensial gateway WA hidup di luar website.
+  Nomor pengirim MPWA-nya sendiri diatur dari kartu yang sama
+  (pengaturan `mpwa_sender`, ternormalisasi 62…; v0.7.2) dan
+  ikut dikembalikan sebagai field `sender` pada respons
+  `expiring-licenses`, jadi workflow mengambilnya otomatis
+  setiap berjalan — mengganti nomor pengirim cukup dari
+  dashboard, tanpa mengubah workflow.
 
 **Wajib sebelum memakai menu Tenant & Lisensi:** jalankan migrasi
 M4 sekali di phpMyAdmin —

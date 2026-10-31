@@ -10,7 +10,7 @@ final class Config
     /** Versi aplikasi; naikkan setiap milestone. */
     public static function appVersion(): string
     {
-        return '0.7.1';
+        return '0.7.2';
     }
 
     /** Nomor milestone blueprint yang sedang berjalan (5 = Event, Paket, Album & API Sesi). */

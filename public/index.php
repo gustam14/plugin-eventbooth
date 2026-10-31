@@ -29,6 +29,7 @@ declare(strict_types=1);
  *   POST cabut perangkat: /tenant/licenses/... & /admin/...    (M4c)
  *   POST /admin/licenses/{id}/devices/add -> tambah perangkat  (M4)
  *   GET|POST /api/automation/* -> pengingat perpanjangan n8n   (M4)
+ *   POST /admin/automation/sender -> nomor pengirim MPWA       (M5)
  *
  * Grup API lain di bawah masih STUB 501 bertanda TODO; logika
  * bisnisnya (Midtrans, registrasi sesi via n8n, berbagi WA)
@@ -992,11 +993,14 @@ $router->get('/admin/tenants', static function (): void {
     try {
         $tenants = Tenant::search($pdo, $query);
         $tokenSet = false;
+        $mpwaSender = null;
         try {
             $storedToken = Settings::get($pdo, 'automation_token');
             $tokenSet = is_string($storedToken) && $storedToken !== '';
+            $mpwaSender = Settings::get($pdo, 'mpwa_sender');
         } catch (PDOException) {
             $tokenSet = false;
+            $mpwaSender = null;
         }
     } catch (PDOException) {
         Flash::error('Tabel tenant belum lengkap. Jalankan migrasi Milestone 4 (database/migrations/2026-10-31-m4-tenant-license.sql) di phpMyAdmin.');
@@ -1016,6 +1020,7 @@ $router->get('/admin/tenants', static function (): void {
         'query' => $query,
         'automationTokenSet' => $tokenSet,
         'automationTokenOnce' => is_string($tokenOnce) ? $tokenOnce : null,
+        'automationSender' => is_string($mpwaSender) && $mpwaSender !== '' ? $mpwaSender : null,
     ]);
 });
 
@@ -1045,6 +1050,52 @@ $router->post('/admin/automation/token/regenerate', static function (): void {
     $_SESSION['automation_token_once'] = $token;
 
     Flash::success('Token otomasi baru dibuat. Salin token di bawah ini ke kredensial workflow n8n.');
+    redirect('/admin/tenants');
+});
+
+// Nomor pengirim MPWA untuk pengingat kedaluwarsa (v0.7.2):
+// disimpan sebagai pengaturan platform 'mpwa_sender' agar workflow
+// n8n tidak meng-hardcode nomor — workflow membacanya dari field
+// 'sender' pada respons /api/automation/expiring-licenses.
+// Kosong = belum diatur (workflow tidak mengirim).
+$router->post('/admin/automation/sender', static function (): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, nomor pengirim belum dapat disimpan.');
+        redirect('/admin');
+    }
+
+    $raw = trim((string) ($_POST['mpwa_sender'] ?? ''));
+
+    if ($raw === '') {
+        try {
+            Settings::set($pdo, 'mpwa_sender', null, false, $user['id']);
+        } catch (PDOException) {
+            Flash::error('Nomor pengirim gagal disimpan. Silakan coba lagi.');
+            redirect('/admin/tenants');
+        }
+
+        Flash::success('Nomor pengirim dikosongkan.');
+        redirect('/admin/tenants');
+    }
+
+    $sender = Whatsapp::normalize($raw);
+    if ($sender === null) {
+        Flash::error('Nomor pengirim tidak sah. Gunakan nomor Indonesia, mis. 0812 3456 7890.');
+        redirect('/admin/tenants');
+    }
+
+    try {
+        Settings::set($pdo, 'mpwa_sender', $sender, false, $user['id']);
+    } catch (PDOException) {
+        Flash::error('Nomor pengirim gagal disimpan. Silakan coba lagi.');
+        redirect('/admin/tenants');
+    }
+
+    Flash::success('Nomor pengirim pengingat disimpan: ' . $sender . '.');
     redirect('/admin/tenants');
 });
 
@@ -2518,6 +2569,10 @@ $licenseApiPayload = static function (array $license, ?array $plan): array {
  * Dipanggil workflow n8n (penjaga: header X-Automation-Token).
  * Pengiriman WhatsApp dilakukan n8n lewat MPWA; website hanya
  * menyediakan daftar jatuh tempo + pencatatan pengiriman.
+ * Respons expiring-licenses juga memuat 'sender' (pengaturan
+ * 'mpwa_sender', v0.7.2): nomor perangkat MPWA yang harus dipakai
+ * workflow untuk mengirim — diatur dari dashboard Super Admin,
+ * tidak di-hardcode di workflow.
  * ------------------------------------------------------------------- */
 $router->get('/api/automation/expiring-licenses', static function () use ($automationGuard): void {
     $pdo = $automationGuard();
@@ -2580,8 +2635,19 @@ $router->get('/api/automation/expiring-licenses', static function () use ($autom
         Json::error('Data pengingat belum dapat dibaca.', 503, 'server_not_configured');
     }
 
+    // Nomor pengirim untuk workflow: dibaca dari pengaturan
+    // platform dan dinormalisasi ulang sebagai pengaman; null
+    // bila belum diatur dari dashboard.
+    $sender = null;
+    try {
+        $sender = Whatsapp::normalize(Settings::get($pdo, 'mpwa_sender'));
+    } catch (PDOException) {
+        $sender = null;
+    }
+
     Json::respond([
         'items' => $items,
+        'sender' => $sender,
         'generated_at' => date('c'),
     ]);
 });
