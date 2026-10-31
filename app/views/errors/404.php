@@ -24,6 +24,7 @@
         display: flex; min-height: 100vh; align-items: center; justify-content: center;
         padding: 32px 20px; text-align: center;
         -webkit-font-smoothing: antialiased;
+        overflow-x: clip;
     }
     ::selection { background: rgba(201, 162, 75, .35); color: #fff; }
     :focus-visible { outline: 2px solid #C9A24B; outline-offset: 2px; border-radius: 4px; }

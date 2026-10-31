@@ -44,8 +44,9 @@ $plans = $plans ?? [];
         line-height: 1.65;
         font-size: 16px;
         -webkit-font-smoothing: antialiased;
-        overflow-x: hidden;
+        overflow-x: clip;
     }
+    img, svg { max-width: 100%; }
     ::selection { background: rgba(201, 162, 75, .35); color: #fff; }
     :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 4px; }
     a { color: var(--gold-2); text-decoration: none; }
@@ -247,19 +248,38 @@ $plans = $plans ?? [];
     }
     footer.site-foot p { color: var(--muted-2); font-size: 13.5px; }
 
-    @media (max-width: 1020px) {
+    @media (max-width: 1024px) {
         .hero-grid { grid-template-columns: 1fr; gap: 44px; }
         .hero .lead { max-width: 640px; }
-        .booth-card { max-width: 520px; transform: none; }
+        .booth-card { width: 100%; max-width: 520px; transform: none; }
         .features, .steps, .pricing { grid-template-columns: 1fr 1fr; }
     }
-    @media (max-width: 680px) {
+    @media (max-width: 768px) {
         .site-nav a.nav-link { display: none; }
         .hero { padding: 56px 0 52px; }
         section.block { padding: 60px 0; }
         .features, .steps, .pricing { grid-template-columns: 1fr; }
+        .price-card .btn { width: 100%; }
         .cta-band { padding: 36px 24px; }
         footer.site-foot .wrap { justify-content: center; text-align: center; }
+    }
+    @media (max-width: 520px) {
+        .wrap { padding: 0 16px; }
+        .site-head .wrap { height: 60px; }
+        .hero { padding: 44px 0 40px; }
+        .hero h1 { font-size: clamp(29px, 8.8vw, 36px); }
+        .hero-cta .btn { flex: 1 1 100%; }
+        .eyebrow { font-size: 11px; padding: 5px 11px; }
+        section.block { padding: 48px 0; }
+        .sec-head { margin-bottom: 36px; }
+        .trust .wrap { gap: 10px 22px; padding-top: 16px; padding-bottom: 16px; }
+        .booth-card { padding: 16px; border-radius: 18px; }
+        .booth-stage { gap: 12px; padding: 14px; }
+        .booth-foot .foot-text span { font-size: 12px; }
+        .price-card { padding: 26px 20px; }
+        .price .amount { font-size: 32px; }
+        .cta-band { padding: 32px 20px; border-radius: 18px; }
+        footer.site-foot { margin-top: 60px; }
     }
 </style>
 </head>
@@ -429,25 +449,33 @@ $plans = $plans ?? [];
         return 'Rp' . number_format($price, 0, ',', '.');
     };
 
-    // Akhiran periode di samping harga.
-    $publicSuffix = static function (array $plan): string {
-        if ((float) ($plan['price'] ?? 0) > 0) {
-            $days = (int) ($plan['billing_period_days'] ?? 30);
-            if ($days === 30) {
-                return '/ bulan';
-            }
-            if ($days === 365) {
-                return '/ tahun';
-            }
-            if ($days === 1) {
-                return '/ hari';
-            }
-            return '/ ' . number_format($days, 0, ',', '.') . ' hari';
-        }
+    // Pemetaan jumlah hari -> label periode tampilan.
+    $periodLabel = static function (int $days): string {
+        return match ($days) {
+            365, 360 => '/ tahun',
+            180 => '/ 6 bulan',
+            90 => '/ 3 bulan',
+            30 => '/ bulan',
+            7 => '/ minggu',
+            1 => '/ hari',
+            default => '/ ' . number_format($days, 0, ',', '.') . ' hari',
+        };
+    };
+
+    // Akhiran periode di samping harga mengikuti MASA AKTIF LISENSI
+    // (yang dibeli pelanggan adalah waktu lisensi), bukan periode
+    // tagihan. Masa aktif 0 -> pakai periode tagihan dengan pemetaan
+    // yang sama; keduanya 0 -> tanpa kedaluwarsa.
+    $publicSuffix = static function (array $plan) use ($periodLabel): string {
         $duration = (int) ($plan['license_duration_days'] ?? 0);
-        return $duration > 0
-            ? '/ ' . number_format($duration, 0, ',', '.') . ' hari'
-            : '/ tanpa batas';
+        if ($duration > 0) {
+            return $periodLabel($duration);
+        }
+        $billing = (int) ($plan['billing_period_days'] ?? 0);
+        if ($billing > 0) {
+            return $periodLabel($billing);
+        }
+        return '/ tanpa kedaluwarsa';
     };
 
     $publicDesc = static function (array $plan): string {

@@ -54,7 +54,10 @@ body {
     line-height: 1.6;
     font-size: 15.5px;
     -webkit-font-smoothing: antialiased;
+    overflow-x: clip;
 }
+img { max-width: 100%; height: auto; }
+svg { max-width: 100%; }
 ::selection { background: rgba(201, 162, 75, .35); color: #fff; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #262B36; border-radius: 8px; border: 2px solid var(--bg); }
@@ -244,6 +247,7 @@ footer.dash {
 .table-wrap {
     background: var(--panel); border: 1px solid var(--line);
     border-radius: var(--r-lg); overflow-x: auto; box-shadow: var(--shadow);
+    -webkit-overflow-scrolling: touch;
 }
 table.list { width: 100%; border-collapse: collapse; min-width: 880px; }
 table.list th, table.list td {
@@ -308,7 +312,7 @@ body.auth {
         var(--bg);
     background-size: auto, 46px 46px, 46px 46px, auto;
 }
-.auth-shell { width: 100%; max-width: 420px; }
+.auth-shell { width: min(420px, 100%); max-width: 420px; }
 .auth-logo { display: flex; flex-direction: column; align-items: center; gap: 13px; margin-bottom: 24px; text-align: center; }
 .auth-logo .brandmark-text { font-size: 19px; }
 .auth-card {
@@ -342,8 +346,11 @@ body.auth {
     .user-row { margin-bottom: 0; }
     .logout-form { flex: none; }
     .main { margin-left: 0; }
-    .topbar { padding: 14px 20px; }
-    .page-title { font-size: 18.5px; }
+    .topbar { padding: 14px 20px; gap: 12px; }
+    .page-title {
+        font-size: 18.5px; min-width: 0;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .content { padding: 24px 20px 48px; }
     .stats, .stats-3 { grid-template-columns: repeat(2, 1fr); }
     .cards { grid-template-columns: 1fr; }
@@ -353,6 +360,13 @@ body.auth {
     dl.profile dd { margin-bottom: 9px; }
 }
 @media (max-width: 520px) {
-    .stats, .stats-3 { grid-template-columns: 1fr 1fr; }
+    .stats, .stats-3 { grid-template-columns: 1fr; }
+    .stat .num { font-size: 26px; }
+    .topbar { padding: 12px 16px; }
+    .content { padding: 20px 16px 40px; }
+    .content h1 { font-size: 20px; }
+    body.auth { padding: 28px 12px; }
     .auth-card { padding: 26px 22px; }
+    .form-actions .btn { flex: 1 1 auto; }
+    .flash { padding: 11px 13px; }
 }
