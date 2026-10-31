@@ -1,0 +1,20 @@
+# Plugin Eventbooth — document root menunjuk folder ini (public/).
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Berkas/direktori yang benar-benar ada dilayani langsung.
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Selebihnya ke front controller.
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+# Jaring pengaman: tolak berkas sensitif bila suatu saat ada yang
+# tidak sengaja tersalin ke folder publik ini.
+<FilesMatch "(\.env.*|\.sql$|\.md$|\.git.*)">
+    Require all denied
+</FilesMatch>

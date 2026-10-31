@@ -1,0 +1,12 @@
+# Konfigurasi & rahasia lokal — jangan pernah masuk repo
+.env
+
+# Log & cache runtime
+*.log
+logs/
+cache/
+
+# Berkas sistem/editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,19 @@
+# Plugin Eventbooth — aturan bila document root = root repo ini.
+# (Bila document root sudah menunjuk public/, berkas ini tidak terpakai.)
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Jangan pernah sajikan berkas sensitif / kode sumber langsung.
+    RewriteRule (^|/)(\.env|\.git)(/|$) - [F,L]
+    RewriteRule ^(app|database)/ - [F,L]
+
+    # Teruskan semua permintaan lain ke front controller di public/.
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteRule ^(.*)$ public/index.php [QSA,L]
+</IfModule>
+
+<FilesMatch "(\.env.*|\.sql$|\.md$)">
+    Require all denied
+</FilesMatch>
