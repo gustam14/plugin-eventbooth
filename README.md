@@ -35,6 +35,9 @@ website/
 │   ├── Settings.php    # key-value app_settings (M3)
 │   ├── GoogleDrive.php # klien OAuth + Drive API via cURL (M3)
 │   ├── GoogleAccount.php # repository google_accounts (M3)
+│   ├── Whatsapp.php    # normalisasi nomor WhatsApp 62… (M4)
+│   ├── Tenant.php      # repository + validasi tenant (M4)
+│   ├── License.php     # lisensi: kunci, snapshot, perangkat, status (M4)
 │   └── views/
 │       ├── landing.php
 │       ├── partials/   # layout dashboard (atas & bawah)
@@ -44,7 +47,8 @@ website/
 │       └── errors/     # 403 & 404
 └── database/
     ├── schema.sql      # skema MySQL lengkap + seed plan contoh
-    └── seed-admin.sql  # TEMPLAT akun Super Admin pertama (M2)
+    ├── seed-admin.sql  # TEMPLAT akun Super Admin pertama (M2)
+    └── migrations/     # migrasi SATU KALI per milestone (phpMyAdmin)
 ```
 
 ## Kebutuhan server
@@ -114,7 +118,7 @@ akun bawaan dan tidak ada kata sandi bawaan di repo ini.
    harus berbeda dari kata sandi sementara itu.
 
 Akun tenant dan pengguna tenant dibuat dari dashboard Super Admin
-pada milestone berikutnya.
+lewat menu **Tenant & Lisensi** (Milestone 4, lihat di bawah).
 
 ## Milestone 3 — Mengaitkan Google Drive pusat
 
@@ -150,6 +154,48 @@ panjang) — tanpa itu tombol pengaitan nonaktif, karena refresh
 token tidak boleh disimpan tanpa enkripsi. Endpoint
 `/api/drive/*` untuk n8n/aplikasi menyusul di M5.
 
+## Milestone 4 — Tenant & Lisensi
+
+Menu **Tenant & Lisensi** (`/admin/tenants`) di dashboard Super
+Admin mengelola pembeli lisensi dan lisensinya:
+
+- **Data tenant lengkap** — nama vendor, penanggung jawab, email,
+  WhatsApp (dinormalisasi otomatis ke format 62…), alamat, dan
+  catatan internal. Kontak ini dipakai untuk notifikasi
+  perpanjangan, jadi wajib diisi. Dari halaman detail tenant bisa
+  dibuat akun login tenant (`tenant_admin`/`tenant_staff`), tenant
+  bisa diaktifkan/dinonaktifkan (tenant nonaktif ditolak API
+  lisensinya), dan ada tombol Chat WhatsApp (wa.me).
+- **Penerbitan lisensi** — pilih plan aktif; kunci berformat
+  `EB-XXXX-XXXX-XXXX-XXXX` ditampilkan **sekali** (database hanya
+  menyimpan hash SHA-256 + prefix). Batas & fitur plan dibekukan ke
+  lisensi sebagai snapshot, jadi mengubah plan tidak mengubah
+  lisensi yang sudah terbit. Aksi per lisensi: **Perpanjang**
+  (basis max(sekarang, kedaluwarsa) + durasi plan; lisensi
+  tersuspensi ikut aktif lagi), **Tangguhkan/Aktifkan**, **Cabut**.
+- **API aplikasi booth** — `POST /api/license/activate` dan
+  `POST /api/license/validate` (body JSON `license_key`,
+  `device_id`, opsional `device_name`/`app_version`). Identitas
+  perangkat disimpan sebagai hash SHA-256. Respons keberhasilan
+  memuat entitlement dari snapshot plan dan ditandatangani
+  HMAC-SHA256 dengan kunci turunan `APP_KEY`.
+- **Pengingat perpanjangan (fondasi)** — ringkasan Super Admin
+  menampilkan lisensi yang berakhir ≤ 30 hari. Untuk otomatisasi:
+  `GET /api/automation/expiring-licenses` dan
+  `POST /api/automation/mark-notified` (header
+  `X-Automation-Token`; token dibuat dari kartu "Otomasi
+  Pengingat" di daftar tenant dan ditampilkan sekali). Workflow
+  n8n membaca daftar ambang 7/3/1 hari, mengirim WhatsApp lewat
+  MPWA, lalu mencatat pengiriman — pengirimannya sendiri berada
+  di n8n karena kredensial gateway WA hidup di luar website.
+
+**Wajib sebelum memakai menu Tenant & Lisensi:** jalankan migrasi
+M4 sekali di phpMyAdmin —
+`database/migrations/2026-10-31-m4-tenant-license.sql`
+(menambah kolom data vendor tenant, snapshot lisensi, dan tabel
+`license_notifications`). Instalasi baru dari `schema.sql` tidak
+memerlukannya karena skema sudah memuat perubahan yang sama.
+
 ## Roadmap milestone
 
 - **M1 — Fondasi (selesai):** scaffold ini — router, konfigurasi
@@ -170,9 +216,14 @@ token tidak boleh disimpan tanpa enkripsi. Endpoint
   refresh token terenkripsi), multi-akun + akun default, tes
   koneksi & kuota, putuskan akun. Penugasan Drive per event dan
   endpoint `/api/drive/*` menyusul di M5.
-- **M4 — Midtrans:** checkout & perpanjangan lisensi (Midtrans
-  platform) dan pembayaran tamu (Midtrans per tenant), webhook
-  notifikasi terverifikasi tanda tangan.
+- **M4 — Tenant & Lisensi (selesai):** manajemen tenant (data
+  kontak lengkap untuk notifikasi), akun login tenant, penerbitan/
+  perpanjangan/penangguhan/pencabutan lisensi dengan snapshot
+  plan, API lisensi aplikasi booth bertanda tangan HMAC, dan
+  fondasi pengingat perpanjangan (endpoint otomasi untuk n8n).
+  Checkout & perpanjangan lisensi via Midtrans platform dan
+  pembayaran tamu (Midtrans per tenant) menyusul setelah ini,
+  dengan webhook notifikasi terverifikasi tanda tangan.
 - **M5 — Publik & sesi:** album `/e/{slug}` dan `/s/{kode}`,
   `/api/session/register`, berbagi WhatsApp via n8n/MPWA,
   integrasi workflow n8n "Plugin Eventbooth".

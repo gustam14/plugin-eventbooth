@@ -16,6 +16,9 @@ declare(strict_types=1);
  *   GET|POST /account/password -> ganti kata sandi            (M2.1)
  *   GET  /admin/drive + OAuth Google Drive pusat              (M3)
  *   GET  /auth/google/callback -> callback OAuth Google       (M3)
+ *   CRUD /admin/tenants + aksi lisensi /admin/licenses         (M4)
+ *   POST /api/license/activate|validate -> API aplikasi booth  (M4)
+ *   GET|POST /api/automation/* -> pengingat perpanjangan n8n   (M4)
  *
  * Grup API lain di bawah masih STUB 501 bertanda TODO; logika
  * bisnisnya (lisensi, Midtrans, Drive, sesi) dibangun bertahap
@@ -262,6 +265,7 @@ $router->get('/admin', static function (): void {
 
     $counts = ['tenants' => 0, 'licenses' => 0, 'plans' => 0, 'events' => 0];
     $dbReady = false;
+    $expiring = [];
 
     $pdo = Database::pdo();
     if ($pdo !== null) {
@@ -275,6 +279,14 @@ $router->get('/admin', static function (): void {
             // Tabel belum diimpor: tampilkan nol + pemberitahuan.
             $dbReady = false;
         }
+
+        // Kartu kedaluwarsa (M4): diam-diam kosong bila tabel belum
+        // tersedia — ringkasan tidak boleh ikut rusak karenanya.
+        try {
+            $expiring = License::expiringWithin($pdo, 30);
+        } catch (PDOException) {
+            $expiring = [];
+        }
     }
 
     View::render('admin/overview', [
@@ -283,6 +295,7 @@ $router->get('/admin', static function (): void {
         'flashes' => Flash::pull(),
         'dbReady' => $dbReady,
         'counts' => $counts,
+        'expiring' => $expiring,
     ]);
 });
 
@@ -858,6 +871,523 @@ $router->post('/admin/drive/{id}/disconnect', static function (array $params): v
 });
 
 /* ---------------------------------------------------------------------
+ * Tenant & Lisensi (Milestone 4) — hanya role super_admin.
+ *
+ * Data tenant lengkap (vendor, penanggung jawab, email, WhatsApp,
+ * alamat, catatan) karena kontaknya dipakai notifikasi perpanjangan.
+ * Kunci lisensi disimpan sebagai hash SHA-256 + prefix; kunci utuh
+ * ditampilkan SEKALI saat penerbitan lewat session.
+ *
+ * Halaman-halaman ini memakai kolom migrasi M4 (vendor_name,
+ * whatsapp, address, plan_snapshot, last_seen_at) — sebelum migrasi
+ * dijalankan, query melempar PDOException dan handler mengalihkan
+ * dengan pesan untuk menjalankan migrasi.
+ * ------------------------------------------------------------------- */
+$router->get('/admin/tenants', static function (): void {
+    $user = Auth::requireRole('super_admin');
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, daftar tenant belum dapat ditampilkan.');
+        redirect('/admin');
+    }
+
+    $query = trim((string) ($_GET['q'] ?? ''));
+
+    try {
+        $tenants = Tenant::search($pdo, $query);
+        $tokenSet = false;
+        try {
+            $storedToken = Settings::get($pdo, 'automation_token');
+            $tokenSet = is_string($storedToken) && $storedToken !== '';
+        } catch (PDOException) {
+            $tokenSet = false;
+        }
+    } catch (PDOException) {
+        Flash::error('Tabel tenant belum lengkap. Jalankan migrasi Milestone 4 (database/migrations/2026-10-31-m4-tenant-license.sql) di phpMyAdmin.');
+        redirect('/admin');
+    }
+
+    // Token otomasi baru hanya ditampilkan satu kali (dari session).
+    Auth::start();
+    $tokenOnce = $_SESSION['automation_token_once'] ?? null;
+    unset($_SESSION['automation_token_once']);
+
+    View::render('admin/tenants/index', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'tenants' => $tenants,
+        'query' => $query,
+        'automationTokenSet' => $tokenSet,
+        'automationTokenOnce' => is_string($tokenOnce) ? $tokenOnce : null,
+    ]);
+});
+
+$router->post('/admin/automation/token/regenerate', static function (): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, token otomasi belum dapat dibuat.');
+        redirect('/admin');
+    }
+
+    // 32 karakter heksadesimal dari 16 byte acak.
+    $token = bin2hex(random_bytes(16));
+
+    try {
+        Settings::set($pdo, 'automation_token', $token, false, $user['id']);
+    } catch (PDOException) {
+        Flash::error('Token otomasi gagal disimpan. Silakan coba lagi.');
+        redirect('/admin/tenants');
+    }
+
+    // Tampilkan sekali lewat session; sesudah itu token tidak
+    // pernah dirender lagi dari nilai tersimpannya.
+    Auth::start();
+    $_SESSION['automation_token_once'] = $token;
+
+    Flash::success('Token otomasi baru dibuat. Salin token di bawah ini ke kredensial workflow n8n.');
+    redirect('/admin/tenants');
+});
+
+// PENTING: rute /create didaftarkan SEBELUM /{id} agar kata
+// "create" tidak tertangkap sebagai parameter id.
+$router->get('/admin/tenants/create', static function (): void {
+    $user = Auth::requireRole('super_admin');
+
+    View::render('admin/tenants/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Tambah Tenant',
+        'action' => '/admin/tenants',
+        'values' => Tenant::formValues(),
+        'errors' => [],
+        'isEdit' => false,
+    ]);
+});
+
+$router->post('/admin/tenants', static function (): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, tenant belum dapat disimpan.');
+        redirect('/admin');
+    }
+
+    try {
+        [$data, $errors] = Tenant::validate($pdo, $_POST);
+        [$loginAccount, $loginErrors] = Tenant::validateLoginAccount(
+            $pdo,
+            $_POST,
+            (string) ($data['contact_name'] ?? '')
+        );
+        $errors = array_merge($errors, $loginErrors);
+
+        if ($errors !== []) {
+            $flashes = Flash::pull();
+            $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+            View::render('admin/tenants/form', [
+                'appName' => Config::appName(),
+                'user' => $user,
+                'flashes' => $flashes,
+                'heading' => 'Tambah Tenant',
+                'action' => '/admin/tenants',
+                'values' => Tenant::formValues(null, $_POST),
+                'errors' => $errors,
+                'isEdit' => false,
+            ], 422);
+            return;
+        }
+
+        // Tenant + akun login awal dibuat atomik.
+        $pdo->beginTransaction();
+        $tenantId = Tenant::create($pdo, $data);
+        if ($loginAccount !== null) {
+            Tenant::createUser(
+                $pdo,
+                $tenantId,
+                $loginAccount['name'],
+                $loginAccount['email'],
+                $loginAccount['password'],
+                'tenant_admin'
+            );
+        }
+        $pdo->commit();
+    } catch (PDOException) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        Flash::error('Tenant gagal disimpan. Pastikan migrasi Milestone 4 sudah dijalankan, lalu coba lagi.');
+        redirect('/admin/tenants/create');
+    }
+
+    Flash::success('Tenant "' . (string) $data['vendor_name'] . '" berhasil dibuat.');
+    redirect('/admin/tenants/' . $tenantId);
+});
+
+$router->get('/admin/tenants/{id}', static function (array $params): void {
+    $user = Auth::requireRole('super_admin');
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, detail tenant belum dapat ditampilkan.');
+        redirect('/admin');
+    }
+
+    $id = (int) ($params['id'] ?? 0);
+
+    try {
+        $tenant = Tenant::find($pdo, $id);
+        if ($tenant === null) {
+            View::render('errors/404', [
+                'appName' => Config::appName(),
+                'appUrl' => Config::appUrl(),
+            ], 404);
+            return;
+        }
+
+        $tenantUsers = Tenant::usersOf($pdo, $id);
+        $licenses = License::forTenant($pdo, $id);
+        $activePlans = array_values(array_filter(
+            Plan::all($pdo),
+            static fn (array $plan): bool => (int) ($plan['is_active'] ?? 0) === 1
+        ));
+    } catch (PDOException) {
+        Flash::error('Data tenant belum dapat dibaca. Pastikan migrasi Milestone 4 (database/migrations/2026-10-31-m4-tenant-license.sql) sudah dijalankan.');
+        redirect('/admin/tenants');
+    }
+
+    // Kunci lisensi yang baru diterbitkan tampil satu kali.
+    Auth::start();
+    $newKey = $_SESSION['new_license_key'] ?? null;
+    unset($_SESSION['new_license_key']);
+
+    View::render('admin/tenants/detail', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'tenant' => $tenant,
+        'tenantUsers' => $tenantUsers,
+        'licenses' => $licenses,
+        'activePlans' => $activePlans,
+        'newKey' => is_string($newKey) ? $newKey : null,
+    ]);
+});
+
+$router->get('/admin/tenants/{id}/edit', static function (array $params): void {
+    $user = Auth::requireRole('super_admin');
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, tenant belum dapat diubah.');
+        redirect('/admin');
+    }
+
+    try {
+        $tenant = Tenant::find($pdo, (int) ($params['id'] ?? 0));
+    } catch (PDOException) {
+        Flash::error('Data tenant belum dapat dibaca. Pastikan migrasi Milestone 4 sudah dijalankan.');
+        redirect('/admin/tenants');
+    }
+
+    if ($tenant === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    View::render('admin/tenants/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Ubah Tenant',
+        'action' => '/admin/tenants/' . (int) $tenant['id'],
+        'values' => Tenant::formValues($tenant),
+        'errors' => [],
+        'isEdit' => true,
+    ]);
+});
+
+$router->post('/admin/tenants/{id}', static function (array $params): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, tenant belum dapat disimpan.');
+        redirect('/admin');
+    }
+
+    $id = (int) ($params['id'] ?? 0);
+
+    try {
+        $tenant = Tenant::find($pdo, $id);
+    } catch (PDOException) {
+        Flash::error('Data tenant belum dapat dibaca. Pastikan migrasi Milestone 4 sudah dijalankan.');
+        redirect('/admin/tenants');
+    }
+
+    if ($tenant === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    try {
+        [$data, $errors] = Tenant::validate($pdo, $_POST, $tenant);
+
+        if ($errors !== []) {
+            $flashes = Flash::pull();
+            $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+            View::render('admin/tenants/form', [
+                'appName' => Config::appName(),
+                'user' => $user,
+                'flashes' => $flashes,
+                'heading' => 'Ubah Tenant',
+                'action' => '/admin/tenants/' . $id,
+                'values' => Tenant::formValues($tenant, $_POST),
+                'errors' => $errors,
+                'isEdit' => true,
+            ], 422);
+            return;
+        }
+
+        Tenant::update($pdo, $id, $data);
+    } catch (PDOException) {
+        Flash::error('Tenant gagal disimpan. Pastikan migrasi Milestone 4 sudah dijalankan, lalu coba lagi.');
+        redirect('/admin/tenants/' . $id . '/edit');
+    }
+
+    Flash::success('Tenant "' . (string) $data['vendor_name'] . '" berhasil diperbarui.');
+    redirect('/admin/tenants/' . $id);
+});
+
+$router->post('/admin/tenants/{id}/users', static function (array $params): void {
+    Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, akun login belum dapat dibuat.');
+        redirect('/admin');
+    }
+
+    $id = (int) ($params['id'] ?? 0);
+    $tenant = Tenant::find($pdo, $id);
+    if ($tenant === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $name = trim((string) ($_POST['user_name'] ?? ''));
+    $email = trim((string) ($_POST['user_email'] ?? ''));
+    $password = (string) ($_POST['user_password'] ?? '');
+    $role = (string) ($_POST['user_role'] ?? 'tenant_admin');
+
+    if ($name === '' || $email === '' || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+        Flash::error('Nama dan email akun login wajib diisi dengan format yang sah.');
+        redirect('/admin/tenants/' . $id);
+    }
+    if (strlen($password) < 8) {
+        Flash::error('Kata sandi awal akun login minimal 8 karakter.');
+        redirect('/admin/tenants/' . $id);
+    }
+    if (Tenant::userEmailTaken($pdo, $email)) {
+        Flash::error('Email login "' . $email . '" sudah terdaftar sebagai pengguna. Gunakan email lain.');
+        redirect('/admin/tenants/' . $id);
+    }
+
+    try {
+        Tenant::createUser($pdo, $id, $name, $email, $password, $role);
+    } catch (PDOException) {
+        Flash::error('Akun login gagal dibuat. Silakan coba lagi.');
+        redirect('/admin/tenants/' . $id);
+    }
+
+    Flash::success('Akun login "' . $email . '" berhasil dibuat untuk tenant ini.');
+    redirect('/admin/tenants/' . $id);
+});
+
+$router->post('/admin/tenants/{id}/licenses', static function (array $params): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, lisensi belum dapat diterbitkan.');
+        redirect('/admin');
+    }
+
+    $id = (int) ($params['id'] ?? 0);
+    $tenant = Tenant::find($pdo, $id);
+    if ($tenant === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $plan = Plan::find($pdo, (int) ($_POST['plan_id'] ?? 0));
+    if ($plan === null || (int) ($plan['is_active'] ?? 0) !== 1) {
+        Flash::error('Plan yang dipilih tidak ditemukan atau sedang nonaktif.');
+        redirect('/admin/tenants/' . $id);
+    }
+
+    try {
+        $issued = License::issue($pdo, $id, $plan, (int) $user['id']);
+    } catch (PDOException) {
+        Flash::error('Lisensi gagal diterbitkan. Pastikan migrasi Milestone 4 (kolom plan_snapshot) sudah dijalankan.');
+        redirect('/admin/tenants/' . $id);
+    } catch (RuntimeException) {
+        Flash::error('Lisensi gagal diterbitkan. Silakan coba lagi.');
+        redirect('/admin/tenants/' . $id);
+    }
+
+    // Kunci utuh hanya disimpan di session untuk ditampilkan
+    // SEKALI di halaman detail; database hanya menyimpan hash-nya.
+    Auth::start();
+    $_SESSION['new_license_key'] = $issued['key'];
+
+    Flash::success('Lisensi plan "' . (string) $plan['name'] . '" berhasil diterbitkan untuk ' . Tenant::displayName($tenant) . '.');
+    redirect('/admin/tenants/' . $id);
+});
+
+$router->post('/admin/licenses/{id}/renew', static function (array $params): void {
+    Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, lisensi belum dapat diperpanjang.');
+        redirect('/admin');
+    }
+
+    $license = License::find($pdo, (int) ($params['id'] ?? 0));
+    if ($license === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $tenantId = (int) $license['tenant_id'];
+    $wasSuspended = (string) $license['status'] === 'suspended';
+
+    try {
+        $newExpires = License::renew($pdo, $license);
+    } catch (PDOException) {
+        Flash::error('Perpanjangan gagal disimpan. Silakan coba lagi.');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    if ($newExpires === null) {
+        Flash::error('Lisensi ini tidak dapat diperpanjang (sudah dicabut atau tanpa kedaluwarsa).');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    $message = 'Lisensi berhasil diperpanjang sampai ' . License::formatDateId($newExpires) . '.';
+    if ($wasSuspended) {
+        $message .= ' Lisensi yang ditangguhkan ikut diaktifkan kembali.';
+    }
+    Flash::success($message);
+    redirect('/admin/tenants/' . $tenantId);
+});
+
+$router->post('/admin/licenses/{id}/suspend', static function (array $params): void {
+    Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, status lisensi belum dapat diubah.');
+        redirect('/admin');
+    }
+
+    $license = License::find($pdo, (int) ($params['id'] ?? 0));
+    if ($license === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $tenantId = (int) $license['tenant_id'];
+    $status = (string) $license['status'];
+
+    if ($status === 'revoked') {
+        Flash::error('Lisensi yang sudah dicabut tidak dapat diubah lagi.');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    try {
+        if ($status === 'suspended') {
+            License::setStatus($pdo, (int) $license['id'], 'active');
+            Flash::success('Lisensi berhasil diaktifkan kembali.');
+        } else {
+            License::setStatus($pdo, (int) $license['id'], 'suspended');
+            Flash::success('Lisensi berhasil ditangguhkan. Aplikasi booth tenant akan ditolak sampai diaktifkan lagi.');
+        }
+    } catch (PDOException) {
+        Flash::error('Status lisensi gagal diubah. Silakan coba lagi.');
+    }
+
+    redirect('/admin/tenants/' . $tenantId);
+});
+
+$router->post('/admin/licenses/{id}/revoke', static function (array $params): void {
+    Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, lisensi belum dapat dicabut.');
+        redirect('/admin');
+    }
+
+    $license = License::find($pdo, (int) ($params['id'] ?? 0));
+    if ($license === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $tenantId = (int) $license['tenant_id'];
+
+    if ((string) $license['status'] === 'revoked') {
+        Flash::info('Lisensi ini memang sudah dicabut sebelumnya.');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    try {
+        License::setStatus($pdo, (int) $license['id'], 'revoked');
+    } catch (PDOException) {
+        Flash::error('Lisensi gagal dicabut. Silakan coba lagi.');
+        redirect('/admin/tenants/' . $tenantId);
+    }
+
+    Flash::success('Lisensi berhasil dicabut secara permanen.');
+    redirect('/admin/tenants/' . $tenantId);
+});
+
+/* ---------------------------------------------------------------------
  * Area Tenant (Milestone 2) — role tenant_admin & tenant_staff.
  * Semua query dibatasi tenant_id milik pengguna yang login.
  * ------------------------------------------------------------------- */
@@ -944,6 +1474,354 @@ $router->get('/api/health', static function (): void {
 });
 
 /* ---------------------------------------------------------------------
+ * API — helper bersama (Milestone 4)
+ * ------------------------------------------------------------------- */
+
+/** Baca body JSON request; array kosong bila body bukan JSON objek. */
+$readJsonBody = static function (): array {
+    $raw = file_get_contents('php://input');
+    if (!is_string($raw) || trim($raw) === '') {
+        return [];
+    }
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : [];
+};
+
+/**
+ * Penjaga endpoint otomasi: header X-Automation-Token wajib cocok
+ * (hash_equals) dengan Settings 'automation_token'. Mengembalikan
+ * PDO yang siap pakai; kegagalan apa pun diakhiri respons JSON
+ * (401/503) — tidak pernah halaman HTML.
+ */
+$automationGuard = static function (): PDO {
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Json::error('Server belum dikonfigurasi.', 503, 'server_not_configured');
+    }
+
+    $stored = null;
+    try {
+        $stored = Settings::get($pdo, 'automation_token');
+    } catch (PDOException) {
+        $stored = null;
+    }
+
+    $given = $_SERVER['HTTP_X_AUTOMATION_TOKEN'] ?? null;
+    if (!is_string($stored) || $stored === '' || !is_string($given) || !hash_equals($stored, $given)) {
+        Json::error('Token otomasi tidak sah.', 401, 'unauthorized');
+    }
+
+    return $pdo;
+};
+
+/**
+ * Gerbang bersama API lisensi (aktivasi & validasi): memeriksa
+ * konfigurasi server, keberadaan lisensi, status lisensi, dan
+ * status tenant. Mengembalikan konteks yang dibutuhkan handler;
+ * semua kegagalan diakhiri error JSON berkode stabil.
+ *
+ * @param array<string, mixed> $body
+ * @return array{pdo: PDO, license: array<string, mixed>, tenant: array<string, mixed>,
+ *               plan: array<string, mixed>|null, device_id: string,
+ *               device_name: ?string, app_version: ?string}
+ */
+$licenseApiEntry = static function (array $body): array {
+    if (!Crypto::isConfigured()) {
+        Json::error('Server belum dikonfigurasi (APP_KEY belum diatur).', 503, 'server_not_configured');
+    }
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Json::error('Server belum dikonfigurasi.', 503, 'server_not_configured');
+    }
+
+    $licenseKey = isset($body['license_key']) && is_string($body['license_key'])
+        ? trim($body['license_key']) : '';
+    $deviceId = isset($body['device_id']) && is_string($body['device_id'])
+        ? trim($body['device_id']) : '';
+
+    if ($licenseKey === '' || $deviceId === '') {
+        Json::error('license_key dan device_id wajib diisi.', 422, 'invalid_request');
+    }
+
+    $cap = static function (?string $value, int $max): ?string {
+        if ($value === null) {
+            return null;
+        }
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+        return function_exists('mb_substr')
+            ? mb_substr($value, 0, $max, 'UTF-8')
+            : substr($value, 0, $max);
+    };
+
+    $deviceName = $cap(isset($body['device_name']) && is_string($body['device_name']) ? $body['device_name'] : null, 120);
+    $appVersion = $cap(isset($body['app_version']) && is_string($body['app_version']) ? $body['app_version'] : null, 32);
+
+    try {
+        $license = License::findByKey($pdo, $licenseKey);
+        if ($license === null) {
+            Json::error('Lisensi tidak ditemukan.', 404, 'not_found');
+        }
+
+        $tenant = Tenant::find($pdo, (int) $license['tenant_id']);
+        if ($tenant === null) {
+            Json::error('Lisensi tidak ditemukan.', 404, 'not_found');
+        }
+
+        $plan = Plan::find($pdo, (int) $license['plan_id']);
+    } catch (PDOException) {
+        Json::error('Layanan lisensi belum siap.', 503, 'server_not_configured');
+    }
+
+    // Urutan pemeriksaan: pencabutan & penangguhan lisensi, lalu
+    // status tenant, lalu kedaluwarsa (dihitung dari expires_at).
+    if ((string) $license['status'] === 'revoked') {
+        Json::error('Lisensi sudah dicabut.', 403, 'revoked');
+    }
+    if ((string) $license['status'] === 'suspended') {
+        Json::error('Lisensi sedang ditangguhkan. Hubungi EventBooth.', 403, 'suspended');
+    }
+    if ((string) ($tenant['status'] ?? 'active') !== 'active') {
+        Json::error('Tenant sedang dinonaktifkan. Hubungi EventBooth.', 403, 'tenant_inactive');
+    }
+    if (License::effectiveStatus($license) === 'expired') {
+        Json::error('Lisensi sudah kedaluwarsa. Silakan perpanjang.', 410, 'expired');
+    }
+
+    return [
+        'pdo' => $pdo,
+        'license' => $license,
+        'tenant' => $tenant,
+        'plan' => $plan,
+        'device_id' => $deviceId,
+        'device_name' => $deviceName,
+        'app_version' => $appVersion,
+    ];
+};
+
+/**
+ * Payload keberhasilan API lisensi + tanda tangan HMAC-SHA256.
+ * Kanonisasi tanda tangan: json_encode payload TANPA kunci
+ * 'signature', urutan kunci persis seperti susunan di bawah —
+ * aplikasi booth memverifikasi dengan cara yang sama memakai kunci
+ * turunan APP_KEY yang sama (hash('sha256', APP_KEY)).
+ *
+ * @param array<string, mixed>      $license
+ * @param array<string, mixed>|null $plan
+ * @return array<string, mixed>
+ */
+$licenseApiPayload = static function (array $license, ?array $plan): array {
+    $ent = License::entitlements($license, $plan);
+
+    $payload = [
+        'status' => 'active',
+        'license' => [
+            'plan' => $ent['plan_name'],
+            'expires_at' => $license['expires_at'] ?? null,
+            'issued_at' => $license['starts_at'] ?? null,
+        ],
+        'entitlements' => [
+            'max_devices' => $ent['max_devices'],
+            'max_events' => $ent['max_events'],
+            'drive_quota_gb' => $ent['drive_quota_gb'],
+            'session_quota' => $ent['session_quota'],
+            'retention_days' => $ent['retention_days'],
+            'features' => $ent['features'],
+        ],
+        'server_time' => date('c'),
+    ];
+
+    $payload['signature'] = hash_hmac(
+        'sha256',
+        (string) json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        hash('sha256', (string) Config::appKey())
+    );
+
+    return $payload;
+};
+
+/* ---------------------------------------------------------------------
+ * API — otomasi pengingat perpanjangan (Milestone 4).
+ * Dipanggil workflow n8n (penjaga: header X-Automation-Token).
+ * Pengiriman WhatsApp dilakukan n8n lewat MPWA; website hanya
+ * menyediakan daftar jatuh tempo + pencatatan pengiriman.
+ * ------------------------------------------------------------------- */
+$router->get('/api/automation/expiring-licenses', static function () use ($automationGuard): void {
+    $pdo = $automationGuard();
+
+    try {
+        $items = [];
+        foreach (License::REMINDER_THRESHOLDS as $threshold) {
+            $stmt = $pdo->prepare(
+                "SELECT l.id AS license_id, l.license_key_prefix, l.expires_at,
+                        p.name AS plan_name,
+                        t.vendor_name, t.name AS tenant_name, t.contact_name,
+                        t.whatsapp, t.phone
+                   FROM licenses l
+                   JOIN tenants t ON t.id = l.tenant_id
+                   JOIN plans p ON p.id = l.plan_id
+                  WHERE l.status IN ('active', 'pending')
+                    AND t.status = 'active'
+                    AND l.expires_at IS NOT NULL
+                    AND l.expires_at >= NOW()
+                    AND l.expires_at <= DATE_ADD(NOW(), INTERVAL {$threshold} DAY)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM license_notifications n
+                         WHERE n.license_id = l.id
+                           AND n.threshold_days = :threshold
+                           AND n.expires_at_snapshot = l.expires_at
+                    )
+                  ORDER BY l.expires_at ASC"
+            );
+            $stmt->execute(['threshold' => $threshold]);
+
+            foreach ($stmt->fetchAll() as $row) {
+                $daysLeft = (int) floor((strtotime((string) $row['expires_at']) - time()) / 86400);
+                $vendor = trim((string) ($row['vendor_name'] ?? '')) !== ''
+                    ? (string) $row['vendor_name']
+                    : (string) ($row['tenant_name'] ?? '');
+                $whatsapp = Whatsapp::normalize($row['whatsapp'] ?? null)
+                    ?? Whatsapp::normalize($row['phone'] ?? null);
+                $tanggal = License::formatDateId((string) $row['expires_at']);
+
+                $items[] = [
+                    'license_id' => (int) $row['license_id'],
+                    // Kunci utuh tidak disimpan server (hanya hash),
+                    // jadi yang dikirim adalah prefix identifikasinya.
+                    'license_key' => (string) ($row['license_key_prefix'] ?? ''),
+                    'vendor_name' => $vendor,
+                    'contact_name' => $row['contact_name'] !== null ? (string) $row['contact_name'] : null,
+                    'whatsapp' => $whatsapp,
+                    'plan_name' => (string) ($row['plan_name'] ?? ''),
+                    'expires_at' => (string) $row['expires_at'],
+                    'days_left' => $daysLeft,
+                    'threshold_days' => $threshold,
+                    'message' => 'Halo ' . $vendor . ', lisensi Plugin Eventbooth Anda (plan '
+                        . (string) ($row['plan_name'] ?? '') . ') akan berakhir pada ' . $tanggal
+                        . ' (' . $daysLeft . ' hari lagi). Silakan hubungi EventBooth untuk '
+                        . 'perpanjangan agar layanan booth Anda tidak terganggu. Terima kasih.',
+                ];
+            }
+        }
+    } catch (PDOException) {
+        Json::error('Data pengingat belum dapat dibaca.', 503, 'server_not_configured');
+    }
+
+    Json::respond([
+        'items' => $items,
+        'generated_at' => date('c'),
+    ]);
+});
+
+$router->post('/api/automation/mark-notified', static function () use ($automationGuard, $readJsonBody): void {
+    $pdo = $automationGuard();
+    $body = $readJsonBody();
+
+    $licenseId = isset($body['license_id']) ? (int) $body['license_id'] : 0;
+    $threshold = isset($body['threshold_days']) ? (int) $body['threshold_days'] : 0;
+
+    if ($licenseId <= 0 || !in_array($threshold, License::REMINDER_THRESHOLDS, true)) {
+        Json::error('license_id dan threshold_days (7, 3, atau 1) wajib diisi dengan benar.', 422, 'invalid_request');
+    }
+
+    try {
+        $license = License::find($pdo, $licenseId);
+        if ($license === null) {
+            Json::error('Lisensi tidak ditemukan.', 404, 'not_found');
+        }
+        if (empty($license['expires_at'])) {
+            Json::error('Lisensi ini tidak memiliki tanggal kedaluwarsa.', 422, 'invalid_request');
+        }
+
+        // Idempoten: pasangan unik (lisensi, ambang, expires_at)
+        // membuat panggilan ulang hanya memperbarui baris yang sama.
+        $stmt = $pdo->prepare(
+            'INSERT INTO license_notifications
+                (license_id, threshold_days, expires_at_snapshot, channel, status, sent_at)
+             VALUES
+                (:license_id, :threshold, :expires_at, \'whatsapp\', \'sent\', NOW())
+             ON DUPLICATE KEY UPDATE status = \'sent\', sent_at = NOW()'
+        );
+        $stmt->execute([
+            'license_id' => $licenseId,
+            'threshold' => $threshold,
+            'expires_at' => (string) $license['expires_at'],
+        ]);
+    } catch (PDOException) {
+        Json::error('Pencatatan pengingat gagal.', 503, 'server_not_configured');
+    }
+
+    Json::respond(['ok' => true]);
+});
+
+/* ---------------------------------------------------------------------
+ * API — lisensi aplikasi booth (Milestone 4, blueprint §2 & §5A).
+ * Body JSON: {license_key, device_id, device_name?, app_version?}.
+ * device_id mentah TIDAK pernah disimpan — hanya hash SHA-256-nya.
+ * ------------------------------------------------------------------- */
+$router->post('/api/license/activate', static function () use ($readJsonBody, $licenseApiEntry, $licenseApiPayload): void {
+    $ctx = $licenseApiEntry($readJsonBody());
+    $pdo = $ctx['pdo'];
+    $license = $ctx['license'];
+    $licenseId = (int) $license['id'];
+    $deviceHash = hash('sha256', $ctx['device_id']);
+
+    try {
+        $device = License::findDevice($pdo, $licenseId, $deviceHash);
+        $isNew = $device === null || (int) ($device['is_active'] ?? 0) !== 1;
+
+        if ($isNew) {
+            $ent = License::entitlements($license, $ctx['plan']);
+            $maxDevices = $ent['max_devices'];
+            if ($maxDevices > 0 && License::deviceCount($pdo, $licenseId) >= $maxDevices) {
+                Json::error(
+                    'Batas perangkat plan (' . $maxDevices . ') sudah tercapai. Lepaskan perangkat lama atau naikkan plan.',
+                    409,
+                    'device_limit'
+                );
+            }
+        }
+
+        License::registerDevice($pdo, $licenseId, $deviceHash, $ctx['device_name'], $ctx['app_version']);
+        License::markActivated($pdo, $licenseId);
+        License::touchLastSeen($pdo, $licenseId);
+    } catch (PDOException) {
+        Json::error('Aktivasi gagal diproses. Silakan coba lagi.', 500, 'server_error');
+    }
+
+    Json::respond($licenseApiPayload($license, $ctx['plan']));
+});
+
+$router->post('/api/license/validate', static function () use ($readJsonBody, $licenseApiEntry, $licenseApiPayload): void {
+    $ctx = $licenseApiEntry($readJsonBody());
+    $pdo = $ctx['pdo'];
+    $license = $ctx['license'];
+    $licenseId = (int) $license['id'];
+    $deviceHash = hash('sha256', $ctx['device_id']);
+
+    try {
+        $device = License::findDevice($pdo, $licenseId, $deviceHash);
+        if ($device === null || (int) ($device['is_active'] ?? 0) !== 1) {
+            Json::error(
+                'Perangkat ini belum terdaftar untuk lisensi tersebut. Lakukan aktivasi terlebih dahulu.',
+                403,
+                'device_not_registered'
+            );
+        }
+
+        License::touchDevice($pdo, (int) $device['id'], $ctx['device_name'], $ctx['app_version']);
+        License::touchLastSeen($pdo, $licenseId);
+    } catch (PDOException) {
+        Json::error('Validasi gagal diproses. Silakan coba lagi.', 500, 'server_error');
+    }
+
+    Json::respond($licenseApiPayload($license, $ctx['plan']));
+});
+
+/* ---------------------------------------------------------------------
  * API — stub grup berikutnya (TODO, belum ada logika bisnis)
  * ------------------------------------------------------------------- */
 $stub = static function (string $note): callable {
@@ -951,11 +1829,6 @@ $stub = static function (string $note): callable {
         Json::notImplemented($note);
     };
 };
-
-// TODO(M2/M6): Lisensi aplikasi booth — aktivasi device &
-// validasi/heartbeat hemat (blueprint §2 & §5A).
-$router->post('/api/license/activate', $stub('Aktivasi lisensi — Milestone 2/6.'));
-$router->post('/api/license/validate', $stub('Validasi/heartbeat lisensi — Milestone 2/6.'));
 
 // TODO(M4): Checkout & perpanjangan lisensi via Midtrans platform
 // (blueprint §5A). Server Key hanya di server, tidak di aplikasi PC.

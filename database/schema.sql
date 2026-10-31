@@ -44,12 +44,15 @@ CREATE TABLE plans (
 CREATE TABLE tenants (
     id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     name         VARCHAR(120) NOT NULL,
+    vendor_name  VARCHAR(160) NULL COMMENT 'Nama vendor/bisnis — label tampilan utama (tersinkron ke name saat disimpan)',
     slug         VARCHAR(80)  NOT NULL,
-    contact_name VARCHAR(120) NULL,
+    contact_name VARCHAR(120) NULL COMMENT 'Nama penanggung jawab / kontak utama',
     email        VARCHAR(190) NULL,
-    phone        VARCHAR(32)  NULL COMMENT 'Nomor WhatsApp utama tenant',
+    phone        VARCHAR(32)  NULL COMMENT 'Nomor WhatsApp utama tenant (tersinkron dengan whatsapp)',
+    whatsapp     VARCHAR(32)  NULL COMMENT 'WhatsApp ternormalisasi format internasional (62…), untuk notifikasi perpanjangan',
+    address      TEXT NULL COMMENT 'Alamat vendor',
     status       ENUM('active','suspended') NOT NULL DEFAULT 'active',
-    notes        TEXT NULL,
+    notes        TEXT NULL COMMENT 'Catatan internal Super Admin',
     created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
@@ -115,9 +118,11 @@ CREATE TABLE licenses (
     license_key_prefix VARCHAR(16) NOT NULL COMMENT 'Awalan kunci untuk identifikasi di dashboard',
     status           ENUM('pending','active','suspended','revoked','expired') NOT NULL DEFAULT 'pending',
     max_devices      INT NOT NULL DEFAULT 1 COMMENT 'Snapshot dari plan saat terbit',
+    plan_snapshot    JSON NULL COMMENT 'Snapshot lengkap batas & fitur plan saat lisensi terbit (nama, durasi, batas, fitur)',
     starts_at        DATETIME NULL,
     expires_at       DATETIME NULL,
     activated_at     DATETIME NULL,
+    last_seen_at     DATETIME NULL COMMENT 'Aktivasi/validasi API terakhir dari aplikasi booth',
     source           ENUM('checkout','manual') NOT NULL DEFAULT 'manual' COMMENT 'checkout = dibayar via Midtrans; manual = penjualan offline',
     created_by       BIGINT UNSIGNED NULL,
     created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -150,6 +155,30 @@ CREATE TABLE license_devices (
     PRIMARY KEY (id),
     UNIQUE KEY uq_license_devices (license_id, device_id_hash),
     CONSTRAINT fk_license_devices_license FOREIGN KEY (license_id) REFERENCES licenses (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- Pengingat perpanjangan lisensi (Milestone 4). Baris dibuat saat
+-- notifikasi untuk satu ambang (7/3/1 hari) sudah dikirim untuk satu
+-- nilai expires_at tertentu — pasangan unik (license, threshold,
+-- expires_at) mencegah pengiriman ganda; perpanjangan lisensi
+-- mengubah expires_at sehingga siklus pengingat mulai lagi.
+-- Pengiriman WhatsApp-nya dilakukan workflow n8n + MPWA (gateway di
+-- luar website); website hanya menyediakan antrean + pencatatan ini.
+-- ---------------------------------------------------------------------
+CREATE TABLE license_notifications (
+    id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    license_id          BIGINT UNSIGNED NOT NULL,
+    threshold_days      INT NOT NULL COMMENT 'Ambang pengingat: hari sebelum kedaluwarsa (7/3/1)',
+    expires_at_snapshot DATETIME NOT NULL COMMENT 'Nilai expires_at lisensi saat pengingat dicatat',
+    channel             VARCHAR(32) NOT NULL DEFAULT 'whatsapp',
+    status              VARCHAR(32) NOT NULL DEFAULT 'pending',
+    sent_at             DATETIME NULL,
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_license_notifications (license_id, threshold_days, expires_at_snapshot),
+    KEY idx_license_notifications_status (status),
+    CONSTRAINT fk_license_notifications_license FOREIGN KEY (license_id) REFERENCES licenses (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------

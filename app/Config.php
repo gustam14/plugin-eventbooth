@@ -10,13 +10,13 @@ final class Config
     /** Versi aplikasi; naikkan setiap milestone. */
     public static function appVersion(): string
     {
-        return '0.4.2';
+        return '0.5.0';
     }
 
-    /** Nomor milestone blueprint yang sedang berjalan (3 = Google Drive pusat). */
+    /** Nomor milestone blueprint yang sedang berjalan (4 = Tenant & Lisensi). */
     public static function milestone(): int
     {
-        return 3;
+        return 4;
     }
 
     /**

@@ -7,6 +7,7 @@
  * @var array<int, array{type: string, message: string}> $flashes
  * @var bool $dbReady False bila database belum disetel / tabel belum ada.
  * @var array{tenants: int, licenses: int, plans: int, events: int} $counts
+ * @var array<int, array<string, mixed>> $expiring Lisensi aktif yang berakhir <= 30 hari (M4).
  */
 
 $title = 'Ringkasan Super Admin';
@@ -57,13 +58,14 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
         </p>
         <p style="margin-top: 12px;"><a class="btn btn-primary btn-small" href="/admin/plans">Kelola Plan</a></p>
     </div>
-    <div class="card soon">
-        <span class="soon-tag">Segera hadir</span>
+    <div class="card">
         <h2>Tenant &amp; Lisensi</h2>
         <p>
-            Terbitkan, suspensi, dan cabut lisensi tenant; lepas ikatan
-            perangkat; pantau heartbeat aplikasi booth dan audit log.
+            Daftarkan tenant beserta kontaknya, terbitkan dan
+            perpanjang lisensi, tangguhkan atau cabut lisensi, dan
+            pantau kedaluwarsa untuk pengingat perpanjangan.
         </p>
+        <p style="margin-top: 12px;"><a class="btn btn-primary btn-small" href="/admin/tenants">Kelola Tenant</a></p>
     </div>
     <div class="card soon">
         <span class="soon-tag">Segera hadir</span>
@@ -75,4 +77,59 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
         </p>
     </div>
 </div>
+
+<?php if (($expiring ?? []) !== []): ?>
+<div class="panel-box" style="margin-top: 22px;">
+    <h2 style="font-size: 16.5px; font-weight: 700; margin-bottom: 6px;">Lisensi Akan Berakhir (30 hari ke depan)</h2>
+    <p class="hint" style="margin-bottom: 16px;">
+        Hubungi tenant lebih awal agar booth mereka tidak berhenti di
+        tengah event. Pengingat WhatsApp otomatis berjalan lewat
+        workflow n8n pada ambang 7, 3, dan 1 hari.
+    </p>
+    <div class="table-wrap" style="box-shadow: none;">
+    <table class="list" style="min-width: 0;">
+        <thead>
+        <tr><th>Tenant</th><th>Plan</th><th>Berakhir</th><th>Sisa</th><th>Kontak</th></tr>
+        </thead>
+        <tbody>
+        <?php foreach ($expiring as $row): ?>
+            <?php
+            $wa = Whatsapp::normalize($row['tenant_whatsapp'] ?? null)
+                ?? Whatsapp::normalize($row['tenant_phone'] ?? null);
+            $left = License::daysLeft($row);
+            $vendorLabel = trim((string) ($row['tenant_vendor_name'] ?? '')) !== ''
+                ? (string) $row['tenant_vendor_name']
+                : (string) ($row['tenant_name'] ?? '');
+            ?>
+            <tr>
+                <td>
+                    <a href="/admin/tenants/<?= (int) $row['tenant_id'] ?>"><strong><?= e($vendorLabel) ?></strong></a>
+                </td>
+                <td><?= e((string) ($row['plan_name'] ?? '—')) ?></td>
+                <td><?= e(License::formatDateId((string) ($row['expires_at'] ?? ''))) ?></td>
+                <td>
+                    <?php if ($left !== null && $left <= 7): ?>
+                        <span class="status-off"><?= $left ?> hari lagi</span>
+                    <?php elseif ($left !== null): ?>
+                        <span class="status-warn"><?= $left ?> hari lagi</span>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </td>
+                <td>
+                    <?php if ($wa !== null): ?>
+                        <a href="<?= e(Whatsapp::link($wa)) ?>" target="_blank" rel="noopener">Chat WhatsApp</a>
+                    <?php elseif (!empty($row['tenant_email'])): ?>
+                        <?= e((string) $row['tenant_email']) ?>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+    </div>
+</div>
+<?php endif; ?>
 <?php require BASE_PATH . '/app/views/partials/dashboard_bottom.php'; ?>

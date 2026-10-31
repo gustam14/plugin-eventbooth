@@ -267,6 +267,11 @@ table.list tr:last-child td { border-bottom: none; }
 }
 .status-on { color: var(--success); background: var(--ok-bg); border: 1px solid var(--ok-line); }
 .status-off { color: var(--danger-soft); background: var(--err-bg); border: 1px solid var(--err-line); }
+.status-warn {
+    display: inline-flex; align-items: center;
+    border-radius: 999px; padding: 3px 11px; font-size: 12px; font-weight: 700; white-space: nowrap;
+    color: var(--gold-2); background: var(--gold-soft); border: 1px solid rgba(201, 162, 75, .4);
+}
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .row-actions form { display: inline; }
 
