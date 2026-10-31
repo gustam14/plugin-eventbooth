@@ -10,13 +10,13 @@ final class Config
     /** Versi aplikasi; naikkan setiap milestone. */
     public static function appVersion(): string
     {
-        return '0.6.4';
+        return '0.7.0';
     }
 
-    /** Nomor milestone blueprint yang sedang berjalan (4 = Tenant & Lisensi). */
+    /** Nomor milestone blueprint yang sedang berjalan (5 = Event, Paket, Album & API Sesi). */
     public static function milestone(): int
     {
-        return 4;
+        return 5;
     }
 
     /**

@@ -295,6 +295,62 @@ v0.6.3) yang memuat daftar perangkat dari satu-satunya lisensi
 tenant lengkap dengan tombol **Cabut Perangkat**; daftar
 tertanam di halaman Lisensi Saya tetap ada.
 
+## Milestone 5a — Event, Paket, Album Publik & API Sesi
+
+Dashboard tenant kini mengelola dua hal yang dipakai aplikasi
+booth setiap hari:
+
+- **Event** (`/tenant/events`) — nama, slug album (otomatis dari
+  nama, unik global dengan akhiran -2, -3, …, bisa diisi manual),
+  lokasi, tanggal mulai/selesai (`starts_at`/`ends_at`), dan
+  status (`draft`/`active`/`finished`/`archived`, diubah dari
+  formulir ubah). **Akun penyimpanan dikunci per event** saat
+  dibuat: pilihan *Otomatis* menugaskan akun Drive platform
+  berstatus `connected` dengan sisa kuota paling lega (kuota
+  belum terukur hanya dipilih bila tidak ada yang terukur; seri
+  dimenangkan akun default). Bila belum ada akun terhubung,
+  event tetap dibuat dengan peringatan bahwa upload & album
+  belum berjalan. **Kunci pembayaran per event**
+  (`payment_lock_enabled`, bawaan menyala) menentukan tamu wajib
+  membayar sebelum sesi; matikan untuk event seperti wedding,
+  dengan batas pengganti `limit_mode` (`none`/`event_hours`/
+  `session_quota`) + `session_quota_limit`. Pembuatan event
+  menegakkan `max_events` dari snapshot plan lisensi tenant
+  (0 = tanpa batas).
+- **Paket Sesi** (`/tenant/packages`) — paket MENEMPEL pada
+  event (`packages.event_id`), jadi daftar paket menggabungkan
+  semua event tenant. Mode timer mengikuti enum skema:
+  `per_session` (jumlah sesi), `per_duration` (durasi menit),
+  `combined` (keduanya) — kolom yang relevan wajib diisi sesuai
+  mode. Harga rupiah, status aktif, dan urutan tampil.
+
+**Album publik (tanpa login)** — `/e/{slug}` menampilkan kepala
+event (nama event, nama vendor, tanggal), kisi sesi terbaru
+(60 per halaman, `?page=`), tiap kartu memakai thumbnail media
+pertama sesi sebagai sampul; `/s/{kode}` menampilkan media sesi
+itu (final lebih dulu) dengan tautan **Lihat** (`web_link`
+tersimpan) dan **Unduh** (diturunkan dari `drive_file_id`).
+Slug/kode tak dikenal menjawab 404 publik. Byte foto tidak
+pernah lewat server ini — halaman hanya membaca metadata dan
+tautan yang tersimpan. Kata sandi album
+(`album_password_hash`) belum ditegakkan di milestone ini.
+
+**API aplikasi booth (token perangkat Bearer, sama seperti
+`/api/app/me`)** — `GET /api/app/events` mengembalikan event
+tenant perangkat (status `draft`/`active`: `id`, `name`,
+`slug`, `event_date`, `payment_lock`, `has_drive`) dan paket
+aktifnya (`id`, `event_id`, `name`, `timer_mode`,
+`duration_minutes`, `session_count`, `price` rupiah penuh).
+`POST /api/app/sessions` (body `event_id`, opsional
+`package_id`, `guest_name`, `guest_whatsapp`) membuat sesi
+berstatus `created` dengan kode unik 8 karakter pada event
+milik tenant perangkat itu sendiri (event tenant lain menjawab
+404 `not_found`) dan membalas `album_url`/`session_url`
+absolut. Endpoint Drive (`/api/drive/*`), registrasi media
+(`/api/session/register`), dan berbagi WhatsApp tetap stub
+501 — dikerjakan pada M5b. Tidak ada perubahan skema pada
+milestone ini.
+
 ## Roadmap milestone
 
 - **M1 — Fondasi (selesai):** scaffold ini — router, konfigurasi
@@ -323,8 +379,10 @@ tertanam di halaman Lisensi Saya tetap ada.
   Checkout & perpanjangan lisensi via Midtrans platform dan
   pembayaran tamu (Midtrans per tenant) menyusul setelah ini,
   dengan webhook notifikasi terverifikasi tanda tangan.
-- **M5 — Publik & sesi:** album `/e/{slug}` dan `/s/{kode}`,
-  `/api/session/register`, berbagi WhatsApp via n8n/MPWA,
+- **M5 — Publik & sesi:** 5a selesai (event & paket tenant,
+  album `/e/{slug}` dan `/s/{kode}`, `GET /api/app/events`,
+  `POST /api/app/sessions`). Sisa 5b: `/api/session/register`,
+  endpoint `/api/drive/*`, berbagi WhatsApp via n8n/MPWA,
   integrasi workflow n8n "Plugin Eventbooth".
 - **M6 — API aplikasi booth:** aktivasi lisensi, konfigurasi
   bertanda tangan, heartbeat hemat (blueprint §2).

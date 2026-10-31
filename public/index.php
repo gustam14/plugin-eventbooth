@@ -15,6 +15,9 @@ declare(strict_types=1);
  *   GET  /tenant                                              (M2)
  *   GET  /tenant/licenses -> lisensi milik tenant             (M4)
  *   GET  /tenant/devices -> perangkat terhubung tenant        (M4c)
+ *   CRUD /tenant/events & /tenant/packages (tenant)           (M5a)
+ *   GET  /e/{slug} & /s/{kode} -> album publik                (M5a)
+ *   GET  /api/app/events, POST /api/app/sessions              (M5a)
  *   GET|POST /account/password -> ganti kata sandi            (M2.1)
  *   GET  /admin/drive + OAuth Google Drive pusat              (M3)
  *   GET  /auth/google/callback -> callback OAuth Google       (M3)
@@ -83,9 +86,94 @@ $router->get('/terms', static function (): void {
     ]);
 });
 
-// TODO(M5): album publik per event & per sesi (blueprint §5C).
-// $router->get('/e/{slug}', ...);
-// $router->get('/s/{kode}', ...);
+/* ---------------------------------------------------------------------
+ * Album publik (Milestone 5a, blueprint §5C) — TANPA login, hanya
+ * membaca metadata + tautan tersimpan (byte foto tidak pernah
+ * lewat server ini). Slug/kode tak dikenal -> 404 publik yang sama
+ * seperti halaman lain. Album password (album_password_hash)
+ * belum ditegakkan di milestone ini.
+ * ------------------------------------------------------------------- */
+$router->get('/e/{slug}', static function (array $params): void {
+    $pdo = Database::pdo();
+    $event = null;
+    if ($pdo !== null) {
+        try {
+            $event = Album::eventBySlug($pdo, (string) ($params['slug'] ?? ''));
+        } catch (PDOException) {
+            $event = null;
+        }
+    }
+
+    if ($event === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $perPage = Album::PER_PAGE;
+    $totalSessions = 0;
+    $sessions = [];
+    try {
+        $totalSessions = Album::countSessions($pdo, (int) $event['id']);
+        $totalPages = max(1, (int) ceil($totalSessions / $perPage));
+        $page = isset($_GET['page']) ? (int) $_GET['page'] : 1;
+        $page = max(1, min($page, $totalPages));
+        $sessions = Album::sessionsPage($pdo, (int) $event['id'], $page, $perPage);
+    } catch (PDOException) {
+        // Album tetap tampil dengan keadaan kosong.
+        $totalPages = 1;
+        $page = 1;
+        $sessions = [];
+    }
+
+    View::render('album/event', [
+        'appName' => Config::appName(),
+        'appUrl' => Config::appUrl(),
+        'version' => Config::appVersion(),
+        'event' => $event,
+        'sessions' => $sessions,
+        'page' => $page,
+        'totalPages' => $totalPages,
+        'totalSessions' => $totalSessions,
+    ]);
+});
+
+$router->get('/s/{code}', static function (array $params): void {
+    $pdo = Database::pdo();
+    $session = null;
+    if ($pdo !== null) {
+        try {
+            $session = Album::sessionByCode($pdo, (string) ($params['code'] ?? ''));
+        } catch (PDOException) {
+            $session = null;
+        }
+    }
+
+    if ($session === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $media = [];
+    try {
+        $media = Album::mediaForSession($pdo, (int) $session['id']);
+    } catch (PDOException) {
+        $media = [];
+    }
+
+    View::render('album/session', [
+        'appName' => Config::appName(),
+        'appUrl' => Config::appUrl(),
+        'version' => Config::appVersion(),
+        'session' => $session,
+        'media' => $media,
+    ]);
+});
 
 /* ---------------------------------------------------------------------
  * Autentikasi (Milestone 2)
@@ -1809,6 +1897,436 @@ $router->post('/tenant/licenses/{licenseId}/devices/{deviceId}/revoke', static f
 });
 
 /* ---------------------------------------------------------------------
+ * Event & Paket Sesi milik tenant (Milestone 5a).
+ *
+ * Semua query dibatasi tenant_id pengguna yang login — tenant
+ * tidak pernah melihat/mengubah event & paket tenant lain.
+ * Paket menempel pada event (packages.event_id), jadi halaman
+ * paket menggabungkan paket dari semua event tenant.
+ * ------------------------------------------------------------------- */
+$router->get('/tenant/events', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $events = [];
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $events = Event::forTenant($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $events = [];
+        }
+    }
+
+    View::render('tenant/events/index', [
+        'appName' => Config::appName(),
+        'appUrl' => Config::appUrl(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'events' => $events,
+    ]);
+});
+
+$router->get('/tenant/events/create', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $driveAccounts = [];
+    $pdo = Database::pdo();
+    if ($pdo !== null) {
+        try {
+            $driveAccounts = Event::connectedAccounts($pdo);
+        } catch (PDOException) {
+            $driveAccounts = [];
+        }
+    }
+
+    View::render('tenant/events/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Buat Event',
+        'action' => '/tenant/events',
+        'values' => Event::formValues(),
+        'errors' => [],
+        'driveAccounts' => $driveAccounts,
+    ]);
+});
+
+$router->post('/tenant/events', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, event belum dapat disimpan.');
+        redirect('/tenant');
+    }
+    $tenantId = (int) $tenantId;
+
+    [$data, $errors] = Event::validate($pdo, $_POST);
+    if ($errors !== []) {
+        $driveAccounts = [];
+        try {
+            $driveAccounts = Event::connectedAccounts($pdo);
+        } catch (PDOException) {
+            $driveAccounts = [];
+        }
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('tenant/events/form', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'heading' => 'Buat Event',
+            'action' => '/tenant/events',
+            'values' => Event::formValues(null, $_POST),
+            'errors' => $errors,
+            'driveAccounts' => $driveAccounts,
+        ], 422);
+        return;
+    }
+
+    // Batas event dari snapshot plan lisensi tenant (0 = tanpa
+    // batas; tenant tanpa lisensi dianggap tanpa batas di sini —
+    // penegakan komersialnya ada di lisensi itu sendiri).
+    try {
+        $license = License::liveForTenant($pdo, $tenantId);
+        if ($license !== null) {
+            $plan = Plan::find($pdo, (int) $license['plan_id']);
+            $maxEvents = License::entitlements($license, $plan)['max_events'];
+            if ($maxEvents > 0 && Event::countForTenant($pdo, $tenantId) >= $maxEvents) {
+                Flash::error(
+                    'Batas event plan Anda tercapai (maks ' . $maxEvents . '). Naikkan plan atau hubungi admin.'
+                );
+                redirect('/tenant/events');
+            }
+        }
+    } catch (PDOException) {
+        // Pemeriksaan batas gagal dibaca: pembuatan tetap dicoba.
+    }
+
+    try {
+        Event::create($pdo, $tenantId, $data);
+    } catch (PDOException) {
+        Flash::error('Event gagal disimpan. Silakan coba lagi.');
+        redirect('/tenant/events/create');
+    }
+
+    Flash::success('Event "' . (string) $data['name'] . '" berhasil dibuat.');
+    if (!empty($data['drive_auto_missing'])) {
+        Flash::info('Event dibuat tanpa akun penyimpanan — kaitkan akun di menu Google Drive (Super Admin) agar upload & album berjalan.');
+    }
+    redirect('/tenant/events');
+});
+
+$router->get('/tenant/events/{id}/edit', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, event belum dapat diubah.');
+        redirect('/tenant');
+    }
+
+    $event = Event::findForTenant($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
+    if ($event === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $driveAccounts = [];
+    try {
+        $driveAccounts = Event::connectedAccounts($pdo);
+    } catch (PDOException) {
+        $driveAccounts = [];
+    }
+    // Akun yang sedang terkunci ke event ini tetap ditawarkan
+    // walau statusnya sudah tidak 'connected', agar pilihan
+    // tersimpan tidak hilang dari formulir.
+    if (($event['drive_account_id'] ?? null) !== null) {
+        $currentId = (int) $event['drive_account_id'];
+        $listed = array_map(static fn (array $a): int => (int) $a['id'], $driveAccounts);
+        if (!in_array($currentId, $listed, true)) {
+            try {
+                $current = GoogleAccount::find($pdo, $currentId);
+                if ($current !== null) {
+                    $driveAccounts[] = $current;
+                }
+            } catch (PDOException) {
+                // Abaikan: daftar tetap tanpa akun lama.
+            }
+        }
+    }
+
+    View::render('tenant/events/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Ubah Event',
+        'action' => '/tenant/events/' . (int) $event['id'],
+        'values' => Event::formValues($event),
+        'errors' => [],
+        'driveAccounts' => $driveAccounts,
+    ]);
+});
+
+$router->post('/tenant/events/{id}', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, event belum dapat disimpan.');
+        redirect('/tenant');
+    }
+
+    $id = (int) ($params['id'] ?? 0);
+    $event = Event::findForTenant($pdo, (int) $tenantId, $id);
+    if ($event === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    [$data, $errors] = Event::validate($pdo, $_POST, $event);
+    if ($errors !== []) {
+        $driveAccounts = [];
+        try {
+            $driveAccounts = Event::connectedAccounts($pdo);
+        } catch (PDOException) {
+            $driveAccounts = [];
+        }
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('tenant/events/form', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'heading' => 'Ubah Event',
+            'action' => '/tenant/events/' . $id,
+            'values' => Event::formValues($event, $_POST),
+            'errors' => $errors,
+            'driveAccounts' => $driveAccounts,
+        ], 422);
+        return;
+    }
+
+    try {
+        Event::update($pdo, $id, $data);
+    } catch (PDOException) {
+        Flash::error('Event gagal disimpan. Silakan coba lagi.');
+        redirect('/tenant/events/' . $id . '/edit');
+    }
+
+    Flash::success('Event "' . (string) $data['name'] . '" berhasil diperbarui.');
+    if (!empty($data['drive_auto_missing'])) {
+        Flash::info('Event dibuat tanpa akun penyimpanan — kaitkan akun di menu Google Drive (Super Admin) agar upload & album berjalan.');
+    }
+    redirect('/tenant/events');
+});
+
+$router->get('/tenant/packages', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $packages = [];
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $packages = Package::forTenant($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $packages = [];
+        }
+    }
+
+    View::render('tenant/packages/index', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'packages' => $packages,
+    ]);
+});
+
+$router->get('/tenant/packages/create', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    $tenantEvents = [];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $tenantEvents = Event::forTenant($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $tenantEvents = [];
+        }
+    }
+
+    if ($tenantEvents === []) {
+        Flash::info('Buat event dulu sebelum menambahkan paket sesi.');
+        redirect('/tenant/events');
+    }
+
+    View::render('tenant/packages/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Tambah Paket',
+        'action' => '/tenant/packages',
+        'values' => Package::formValues(),
+        'errors' => [],
+        'events' => $tenantEvents,
+    ]);
+});
+
+$router->post('/tenant/packages', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, paket belum dapat disimpan.');
+        redirect('/tenant');
+    }
+    $tenantId = (int) $tenantId;
+
+    [$data, $errors] = Package::validate($pdo, $tenantId, $_POST);
+    if ($errors !== []) {
+        $tenantEvents = [];
+        try {
+            $tenantEvents = Event::forTenant($pdo, $tenantId);
+        } catch (PDOException) {
+            $tenantEvents = [];
+        }
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('tenant/packages/form', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'heading' => 'Tambah Paket',
+            'action' => '/tenant/packages',
+            'values' => Package::formValues(null, $_POST),
+            'errors' => $errors,
+            'events' => $tenantEvents,
+        ], 422);
+        return;
+    }
+
+    try {
+        Package::create($pdo, $data);
+    } catch (PDOException) {
+        Flash::error('Paket gagal disimpan. Silakan coba lagi.');
+        redirect('/tenant/packages/create');
+    }
+
+    Flash::success('Paket "' . (string) $data['name'] . '" berhasil dibuat.');
+    redirect('/tenant/packages');
+});
+
+$router->get('/tenant/packages/{id}/edit', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, paket belum dapat diubah.');
+        redirect('/tenant');
+    }
+
+    $package = Package::findForTenant($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
+    if ($package === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $tenantEvents = [];
+    try {
+        $tenantEvents = Event::forTenant($pdo, (int) $tenantId);
+    } catch (PDOException) {
+        $tenantEvents = [];
+    }
+
+    View::render('tenant/packages/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Ubah Paket',
+        'action' => '/tenant/packages/' . (int) $package['id'],
+        'values' => Package::formValues($package),
+        'errors' => [],
+        'events' => $tenantEvents,
+    ]);
+});
+
+$router->post('/tenant/packages/{id}', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, paket belum dapat disimpan.');
+        redirect('/tenant');
+    }
+    $tenantId = (int) $tenantId;
+
+    $id = (int) ($params['id'] ?? 0);
+    $package = Package::findForTenant($pdo, $tenantId, $id);
+    if ($package === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    [$data, $errors] = Package::validate($pdo, $tenantId, $_POST, $package);
+    if ($errors !== []) {
+        $tenantEvents = [];
+        try {
+            $tenantEvents = Event::forTenant($pdo, $tenantId);
+        } catch (PDOException) {
+            $tenantEvents = [];
+        }
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('tenant/packages/form', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'heading' => 'Ubah Paket',
+            'action' => '/tenant/packages/' . $id,
+            'values' => Package::formValues($package, $_POST),
+            'errors' => $errors,
+            'events' => $tenantEvents,
+        ], 422);
+        return;
+    }
+
+    try {
+        Package::update($pdo, $id, $data);
+    } catch (PDOException) {
+        Flash::error('Paket gagal disimpan. Silakan coba lagi.');
+        redirect('/tenant/packages/' . $id . '/edit');
+    }
+
+    Flash::success('Paket "' . (string) $data['name'] . '" berhasil diperbarui.');
+    redirect('/tenant/packages');
+});
+
+/* ---------------------------------------------------------------------
  * API — health check
  * ------------------------------------------------------------------- */
 $router->get('/api/health', static function (): void {
@@ -2428,6 +2946,189 @@ $router->post('/api/app/logout', static function () use ($bearerToken): void {
     }
 
     Json::respond(['status' => 'ok']);
+});
+
+/* ---------------------------------------------------------------------
+ * API — event & sesi untuk aplikasi booth (Milestone 5a).
+ * Penjaga yang sama seperti /api/app/me: token sesi perangkat
+ * (Authorization: Bearer) dicari lewat License::findDeviceByToken;
+ * tenant aplikasi SELALU adalah tenant pemilik lisensi perangkat
+ * itu — aplikasi tidak bisa membaca/menyentuh data tenant lain.
+ * ------------------------------------------------------------------- */
+
+/**
+ * Konteks perangkat untuk endpoint berbasis token: memeriksa
+ * konfigurasi server lalu mewariskan [pdo, device, license,
+ * tenant]. Semua kegagalan diakhiri error JSON berkode stabil
+ * (server_not_configured/server_error 503, invalid_token 401).
+ *
+ * @return array{0: PDO, 1: array<string, mixed>, 2: array<string, mixed>, 3: array<string, mixed>}
+ */
+$appDeviceContext = static function () use ($bearerToken): array {
+    if (!Crypto::isConfigured()) {
+        Json::error('Server belum dikonfigurasi (APP_KEY belum diatur).', 503, 'server_not_configured');
+    }
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Json::error('Server belum dikonfigurasi.', 503, 'server_not_configured');
+    }
+
+    $token = $bearerToken();
+    if ($token === null) {
+        Json::error('Token perangkat tidak sah.', 401, 'invalid_token');
+    }
+
+    $device = null;
+    $license = null;
+    $tenant = null;
+    try {
+        $device = License::findDeviceByToken($pdo, $token);
+        if ($device === null) {
+            Json::error('Token perangkat tidak sah.', 401, 'invalid_token');
+        }
+
+        $license = License::find($pdo, (int) $device['license_id']);
+        if ($license === null) {
+            Json::error('Token perangkat tidak sah.', 401, 'invalid_token');
+        }
+
+        $tenant = Tenant::find($pdo, (int) $license['tenant_id']);
+        if ($tenant === null) {
+            Json::error('Token perangkat tidak sah.', 401, 'invalid_token');
+        }
+    } catch (PDOException) {
+        Json::error('Layanan belum siap. Silakan coba lagi.', 503, 'server_error');
+    }
+
+    return [$pdo, $device, $license, $tenant];
+};
+
+/**
+ * Daftar event & paket tenant untuk layar pilihan di aplikasi
+ * booth. Event: hanya status 'draft'/'active' (yang masuk akal
+ * dijalankan booth). Paket: hanya yang aktif, beserta event_id
+ * pasangannya; harga dibulatkan ke rupiah penuh.
+ */
+$router->get('/api/app/events', static function () use ($appDeviceContext): void {
+    [$pdo, $device, $license, $tenant] = $appDeviceContext();
+    $tenantId = (int) $tenant['id'];
+
+    try {
+        $eventRows = Event::forApi($pdo, $tenantId);
+        $packageRows = Package::forApi($pdo, $tenantId);
+    } catch (PDOException) {
+        Json::error('Layanan belum siap. Silakan coba lagi.', 503, 'server_error');
+    }
+
+    $events = [];
+    foreach ($eventRows as $row) {
+        $events[] = [
+            'id' => (int) $row['id'],
+            'name' => (string) $row['name'],
+            'slug' => (string) $row['slug'],
+            'event_date' => !empty($row['starts_at'])
+                ? date('c', (int) strtotime((string) $row['starts_at']))
+                : null,
+            'payment_lock' => (int) ($row['payment_lock_enabled'] ?? 1) === 1,
+            'has_drive' => ($row['drive_account_id'] ?? null) !== null,
+        ];
+    }
+
+    $packages = [];
+    foreach ($packageRows as $row) {
+        $packages[] = [
+            'id' => (int) $row['id'],
+            'event_id' => (int) $row['event_id'],
+            'name' => (string) $row['name'],
+            'timer_mode' => (string) $row['timer_mode'],
+            'duration_minutes' => ($row['duration_minutes'] ?? null) !== null
+                ? (int) $row['duration_minutes'] : null,
+            'session_count' => ($row['session_count'] ?? null) !== null
+                ? (int) $row['session_count'] : null,
+            'price' => (int) round((float) ($row['price'] ?? 0)),
+        ];
+    }
+
+    Json::respond([
+        'status' => 'ok',
+        'events' => $events,
+        'packages' => $packages,
+    ]);
+});
+
+/**
+ * Buat sesi foto baru pada event milik tenant perangkat ini.
+ * Body JSON: {event_id, package_id?, guest_name?, guest_whatsapp?}.
+ * Event wajib milik tenant perangkat (selain itu 404 not_found —
+ * keberadaan event tenant lain tidak dibocorkan). Sesi dibuat
+ * berstatus 'created' dengan kode unik 8 karakter; unggahan &
+ * registrasi media menyusul lewat endpoint Drive/sesi (M5b).
+ */
+$router->post('/api/app/sessions', static function () use ($appDeviceContext, $readJsonBody): void {
+    [$pdo, $device, $license, $tenant] = $appDeviceContext();
+    $tenantId = (int) $tenant['id'];
+
+    $body = $readJsonBody();
+    $eventId = isset($body['event_id']) && is_numeric($body['event_id'])
+        ? (int) $body['event_id']
+        : 0;
+    if ($eventId <= 0) {
+        Json::error('event_id wajib diisi.', 422, 'invalid_request');
+    }
+
+    $cap = static function (mixed $value, int $max): ?string {
+        if (!is_string($value)) {
+            return null;
+        }
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+        return function_exists('mb_substr')
+            ? mb_substr($value, 0, $max, 'UTF-8')
+            : substr($value, 0, $max);
+    };
+    $guestName = $cap($body['guest_name'] ?? null, 120);
+    // WhatsApp tamu disimpan ternormalisasi (62…); nomor yang
+    // tidak terbaca normalisasinya disimpan kosong, bukan menggagalkan sesi.
+    $guestWhatsapp = Whatsapp::normalize($cap($body['guest_whatsapp'] ?? null, 32));
+
+    $session = null;
+    $event = null;
+    try {
+        $event = Event::findForTenant($pdo, $tenantId, $eventId);
+        if ($event === null) {
+            Json::error('Event tidak ditemukan.', 404, 'not_found');
+        }
+
+        $packageId = null;
+        if (isset($body['package_id']) && $body['package_id'] !== null && $body['package_id'] !== '') {
+            if (!is_numeric($body['package_id'])) {
+                Json::error('package_id tidak sah.', 422, 'invalid_request');
+            }
+            $packageId = (int) $body['package_id'];
+            $package = Package::find($pdo, $packageId);
+            if ($package === null || (int) $package['event_id'] !== $eventId) {
+                Json::error('Paket tidak ditemukan pada event ini.', 422, 'invalid_request');
+            }
+        }
+
+        $session = Album::createSession($pdo, $eventId, $packageId, $guestName, $guestWhatsapp);
+        License::touchLastSeen($pdo, (int) $license['id']);
+    } catch (PDOException) {
+        Json::error('Sesi gagal dibuat. Silakan coba lagi.', 503, 'server_error');
+    }
+
+    Json::respond([
+        'status' => 'ok',
+        'session' => [
+            'id' => (int) ($session['id'] ?? 0),
+            'code' => (string) ($session['code'] ?? ''),
+        ],
+        'album_url' => Config::appUrl() . '/e/' . (string) $event['slug'],
+        'session_url' => Config::appUrl() . '/s/' . (string) ($session['code'] ?? ''),
+    ]);
 });
 
 /* ---------------------------------------------------------------------
