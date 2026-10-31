@@ -30,6 +30,9 @@ declare(strict_types=1);
  *   POST /admin/licenses/{id}/devices/add -> tambah perangkat  (M4)
  *   GET|POST /api/automation/* -> pengingat perpanjangan n8n   (M4)
  *   POST /admin/automation/sender -> nomor pengirim MPWA       (M5)
+ *   GET  /admin/payments + pengaturan Midtrans platform        (M6)
+ *   POST /tenant/licenses/checkout + GET .../pay/{orderId}     (M6)
+ *   POST /api/payments/midtrans/notify -> webhook Midtrans     (M6)
  *
  * Grup API lain di bawah masih STUB 501 bertanda TODO; logika
  * bisnisnya (Midtrans, registrasi sesi via n8n, berbagi WA)
@@ -1099,6 +1102,86 @@ $router->post('/admin/automation/sender', static function (): void {
     redirect('/admin/tenants');
 });
 
+// ---------------------------------------------------------------------
+// Milestone 6 — Pembayaran: pengaturan Midtrans platform + daftar
+// pesanan lisensi (Super Admin). Kredensial platform hidup di
+// app_settings (Server Key terenkripsi); URL notifikasi yang harus
+// didaftarkan di dashboard Midtrans: /api/payments/midtrans/notify.
+// ---------------------------------------------------------------------
+$router->get('/admin/payments', static function (): void {
+    $user = Auth::requireRole('super_admin');
+
+    $midtrans = ['environment' => 'sandbox', 'client_key' => null, 'server_key' => null, 'configured' => false];
+    $orders = [];
+    $ordersReady = true;
+    $pdo = Database::pdo();
+    if ($pdo !== null) {
+        try {
+            $midtrans = Midtrans::config($pdo);
+        } catch (PDOException) {
+            // Pengaturan belum terbaca; tampilkan keadaan kosong.
+        }
+        try {
+            $stmt = $pdo->query(
+                "SELECT p.*, t.vendor_name AS tenant_vendor, t.name AS tenant_name,
+                        pl.name AS plan_name
+                   FROM payments p
+                   LEFT JOIN tenants t ON t.id = p.tenant_id
+                   LEFT JOIN plans pl ON pl.id = p.plan_id
+                  WHERE p.purpose = 'license'
+                  ORDER BY p.id DESC
+                  LIMIT 50"
+            );
+            $orders = $stmt->fetchAll();
+        } catch (PDOException) {
+            // Tabel payments belum siap (migrasi M6 belum jalan).
+            $ordersReady = false;
+        }
+    }
+
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? 'plugin.eventbooth.id');
+
+    View::render('admin/payments/index', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'midtrans' => $midtrans,
+        'serverKeyStored' => $midtrans['server_key'] !== null,
+        'orders' => $orders,
+        'ordersReady' => $ordersReady,
+        'notifyUrl' => $scheme . '://' . $host . '/api/payments/midtrans/notify',
+    ]);
+});
+
+$router->post('/admin/payments/settings', static function (): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, pengaturan Midtrans belum dapat disimpan.');
+        redirect('/admin');
+    }
+
+    try {
+        Midtrans::saveSettings(
+            $pdo,
+            (string) ($_POST['environment'] ?? 'sandbox'),
+            (string) ($_POST['client_key'] ?? ''),
+            array_key_exists('server_key', $_POST) ? (string) $_POST['server_key'] : null,
+            $user['id']
+        );
+        Flash::success('Pengaturan Midtrans disimpan.');
+    } catch (MidtransException $e) {
+        Flash::error($e->getMessage());
+    } catch (PDOException) {
+        Flash::error('Pengaturan Midtrans gagal disimpan. Silakan coba lagi.');
+    }
+
+    redirect('/admin/payments');
+});
+
 // PENTING: rute /create didaftarkan SEBELUM /{id} agar kata
 // "create" tidak tertangkap sebagai parameter id.
 $router->get('/admin/tenants/create', static function (): void {
@@ -1844,13 +1927,200 @@ $router->get('/tenant/licenses', static function (): void {
         }
     }
 
+    // Checkout lisensi Midtrans (M6): plan berbayar yang dapat
+    // dibeli tenant + riwayat pesanannya. Best-effort — halaman
+    // tetap tampil walau pembayaran belum siap/dikonfigurasi.
+    $checkoutPlans = [];
+    $midtransReady = false;
+    $orders = [];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $midtransReady = Midtrans::config($pdo)['configured'];
+            if ($midtransReady) {
+                $checkoutPlans = array_values(array_filter(
+                    Plan::all($pdo),
+                    static fn (array $p): bool => (int) ($p['is_active'] ?? 0) === 1
+                        && (float) ($p['price'] ?? 0) > 0
+                ));
+            }
+        } catch (PDOException) {
+            $checkoutPlans = [];
+            $midtransReady = false;
+        }
+        try {
+            $stmt = $pdo->prepare(
+                "SELECT p.*, pl.name AS plan_name
+                   FROM payments p
+                   LEFT JOIN plans pl ON pl.id = p.plan_id
+                  WHERE p.purpose = 'license' AND p.tenant_id = :tenant
+                  ORDER BY p.id DESC
+                  LIMIT 10"
+            );
+            $stmt->execute(['tenant' => (int) $tenantId]);
+            $orders = $stmt->fetchAll();
+        } catch (PDOException) {
+            $orders = [];
+        }
+    }
+
+    // Catatan hasil dari halaman bayar Snap (M6): callback Snap
+    // mengarahkan kembali ke sini dengan ?pay=... — status resmi
+    // pesanan tetap yang tercatat di tabel (dari webhook), teks
+    // ini hanya penjelasan untuk tenant.
+    $flashes = Flash::pull();
+    $payNote = (string) ($_GET['pay'] ?? '');
+    if ($payNote === 'success') {
+        $flashes[] = ['type' => 'success', 'message' => 'Pembayaran diterima Midtrans. Masa aktifmu diperbarui otomatis begitu notifikasi terverifikasi — biasanya beberapa detik; muat ulang halaman ini bila belum berubah.'];
+    } elseif ($payNote === 'pending') {
+        $flashes[] = ['type' => 'info', 'message' => 'Pembayaranmu menunggu penyelesaian. Selesaikan sebelum kedaluwarsa; masa aktif bertambah otomatis setelah dinyatakan lunas.'];
+    } elseif ($payNote === 'error') {
+        $flashes[] = ['type' => 'error', 'message' => 'Pembayaran gagal diproses. Kamu dapat mencoba lagi dari riwayat pembayaran di bawah.'];
+    }
+
     View::render('tenant/licenses', [
         'appName' => Config::appName(),
         'user' => $user,
-        'flashes' => Flash::pull(),
+        'flashes' => $flashes,
         'licenses' => $licenses,
         'currentLicenseId' => $currentLicenseId,
         'devicesByLicense' => $devicesByLicense,
+        'checkoutPlans' => $checkoutPlans,
+        'midtransReady' => $midtransReady,
+        'orders' => $orders,
+    ]);
+});
+
+// Checkout lisensi (M6): buat pesanan di tabel payments, minta
+// token Snap ke Midtrans, lalu arahkan tenant ke halaman bayar.
+// Masa aktif TIDAK berubah di sini — perpanjangan hanya terjadi
+// saat webhook notifikasi terverifikasi menyatakan lunas.
+$router->post('/tenant/licenses/checkout', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Akun tenant tidak ditemukan, pesanan belum dapat dibuat.');
+        redirect('/tenant/licenses');
+    }
+
+    try {
+        $config = Midtrans::config($pdo);
+        $plan = Plan::find($pdo, (int) ($_POST['plan_id'] ?? 0));
+        $tenant = Tenant::find($pdo, (int) $tenantId);
+    } catch (PDOException) {
+        Flash::error('Data pembayaran belum dapat dibaca. Silakan coba lagi.');
+        redirect('/tenant/licenses');
+    }
+
+    if (!$config['configured']) {
+        Flash::error('Pembayaran online belum diaktifkan oleh admin. Silakan hubungi EventBooth untuk perpanjangan manual.');
+        redirect('/tenant/licenses');
+    }
+    if ($plan === null || (int) ($plan['is_active'] ?? 0) !== 1 || (float) ($plan['price'] ?? 0) <= 0) {
+        Flash::error('Plan tidak tersedia untuk dibeli.');
+        redirect('/tenant/licenses');
+    }
+    if ($tenant === null) {
+        Flash::error('Data tenant tidak ditemukan.');
+        redirect('/tenant/licenses');
+    }
+
+    $orderId = 'EBL-' . date('YmdHis') . '-' . strtoupper(bin2hex(random_bytes(3)));
+    try {
+        $stmt = $pdo->prepare(
+            "INSERT INTO payments
+                (purpose, tenant_id, plan_id, plan_snapshot, order_id, gross_amount, status)
+             VALUES ('license', :tenant, :plan, :snapshot, :order_id, :amount, 'pending')"
+        );
+        $stmt->execute([
+            'tenant' => (int) $tenantId,
+            'plan' => (int) $plan['id'],
+            'snapshot' => json_encode($plan, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'order_id' => $orderId,
+            'amount' => (float) $plan['price'],
+        ]);
+    } catch (PDOException) {
+        Flash::error('Fitur pembayaran belum aktif di server (migrasi M6 belum dijalankan).');
+        redirect('/tenant/licenses');
+    }
+
+    try {
+        $snap = Midtrans::createSnapToken(
+            $pdo,
+            ['order_id' => $orderId, 'gross_amount' => (float) $plan['price']],
+            $plan,
+            $tenant
+        );
+        $stmt = $pdo->prepare('UPDATE payments SET snap_token = :token WHERE order_id = :order_id');
+        $stmt->execute(['token' => $snap['token'], 'order_id' => $orderId]);
+    } catch (MidtransException $e) {
+        try {
+            $stmt = $pdo->prepare("UPDATE payments SET status = 'failed' WHERE order_id = :order_id");
+            $stmt->execute(['order_id' => $orderId]);
+        } catch (PDOException) {
+            // Penandaan gagal best-effort; pesan error utama tetap diteruskan.
+        }
+        Flash::error('Midtrans menolak permintaan pembayaran: ' . $e->getMessage());
+        redirect('/tenant/licenses');
+    }
+
+    redirect('/tenant/licenses/pay/' . $orderId);
+});
+
+// Halaman bayar (M6): membuka popup Snap untuk satu pesanan milik
+// tenant yang login. Callback Snap di sini hanya soal tampilan —
+// pelunasan resmi ditentukan webhook server.
+$router->get('/tenant/licenses/pay/{orderId}', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $order = null;
+    $config = null;
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $stmt = $pdo->prepare(
+                "SELECT p.*, pl.name AS plan_name
+                   FROM payments p
+                   LEFT JOIN plans pl ON pl.id = p.plan_id
+                  WHERE p.order_id = :order_id AND p.tenant_id = :tenant
+                    AND p.purpose = 'license'
+                  LIMIT 1"
+            );
+            $stmt->execute([
+                'order_id' => (string) $params['orderId'],
+                'tenant' => (int) $tenantId,
+            ]);
+            $row = $stmt->fetch();
+            $order = $row === false ? null : $row;
+            $config = Midtrans::config($pdo);
+        } catch (PDOException) {
+            $order = null;
+        }
+    }
+
+    if ($order === null) {
+        Flash::error('Pesanan tidak ditemukan.');
+        redirect('/tenant/licenses');
+    }
+    if ((string) $order['status'] === 'paid') {
+        Flash::success('Pesanan ini sudah lunas — masa aktif lisensimu sudah diperbarui.');
+        redirect('/tenant/licenses');
+    }
+    if (empty($order['snap_token']) || $config === null || !$config['configured']) {
+        Flash::error('Sesi pembayaran tidak tersedia lagi. Silakan buat pesanan baru.');
+        redirect('/tenant/licenses');
+    }
+
+    View::render('tenant/pay', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'order' => $order,
+        'snapJsUrl' => Midtrans::snapJsUrl((string) $config['environment']),
+        'clientKey' => (string) $config['client_key'],
     ]);
 });
 
@@ -2574,6 +2844,121 @@ $licenseApiPayload = static function (array $license, ?array $plan): array {
  * workflow untuk mengirim — diatur dari dashboard Super Admin,
  * tidak di-hardcode di workflow.
  * ------------------------------------------------------------------- */
+// Webhook notifikasi Midtrans (M6): satu-satunya jalur yang boleh
+// menyatakan pesanan lisensi lunas. Tanda tangan SHA-512 diverifikasi
+// dengan Server Key platform; saat status menjadi 'paid' pertama
+// kali, lisensi tenant dipenuhi dengan aturan yang sama seperti
+// Tambah Masa Aktif manual (extendWithPlan; terbit baru hanya bila
+// tenant belum pernah memiliki lisensi). Idempoten: notifikasi
+// berulang tidak memperpanjang dua kali.
+$router->post('/api/payments/midtrans/notify', static function () use ($readJsonBody): void {
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Json::error('Database belum disetel.', 503, 'server_not_configured');
+    }
+
+    $payload = $readJsonBody();
+    if ($payload === [] || empty($payload['order_id'])) {
+        Json::error('Payload notifikasi tidak valid.', 400, 'invalid_payload');
+    }
+
+    try {
+        $config = Midtrans::config($pdo);
+    } catch (PDOException) {
+        Json::error('Pengaturan pembayaran belum dapat dibaca.', 503, 'server_not_configured');
+    }
+    if ($config['server_key'] === null) {
+        Json::error('Midtrans platform belum dikonfigurasi.', 503, 'payment_not_configured');
+    }
+
+    try {
+        $stmt = $pdo->prepare('SELECT * FROM payments WHERE order_id = :order_id LIMIT 1');
+        $stmt->execute(['order_id' => (string) $payload['order_id']]);
+        $payment = $stmt->fetch();
+    } catch (PDOException) {
+        Json::error('Data pembayaran belum dapat dibaca.', 503, 'server_not_configured');
+    }
+    if ($payment === false) {
+        Json::error('Pesanan tidak ditemukan.', 404, 'order_not_found');
+    }
+    if (!Midtrans::verifySignature($payload, (string) $config['server_key'])) {
+        Json::error('Tanda tangan notifikasi tidak sah.', 403, 'invalid_signature');
+    }
+
+    $wasPaid = (string) $payment['status'] === 'paid';
+    $newStatus = Midtrans::statusFromNotification($payload);
+    $finalStatus = $wasPaid ? 'paid' : $newStatus;
+
+    try {
+        $stmt = $pdo->prepare(
+            'UPDATE payments
+                SET status = :status, payment_type = :payment_type,
+                    transaction_id = :transaction_id, status_code = :status_code,
+                    raw_webhook = :raw
+              WHERE id = :id'
+        );
+        $stmt->execute([
+            'status' => $finalStatus,
+            'payment_type' => isset($payload['payment_type']) ? (string) $payload['payment_type'] : null,
+            'transaction_id' => isset($payload['transaction_id']) ? (string) $payload['transaction_id'] : null,
+            'status_code' => isset($payload['status_code']) ? (string) $payload['status_code'] : null,
+            'raw' => json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'id' => (int) $payment['id'],
+        ]);
+    } catch (PDOException) {
+        Json::error('Status pembayaran gagal dicatat.', 503, 'server_not_configured');
+    }
+
+    if ($finalStatus === 'paid' && !$wasPaid && (string) $payment['purpose'] === 'license') {
+        $licenseId = $payment['license_id'] !== null ? (int) $payment['license_id'] : null;
+        try {
+            $tenant = $payment['tenant_id'] !== null
+                ? Tenant::find($pdo, (int) $payment['tenant_id'])
+                : null;
+            $plan = null;
+            if ($payment['plan_id'] !== null) {
+                $plan = Plan::find($pdo, (int) $payment['plan_id']);
+            }
+            if ($plan === null && !empty($payment['plan_snapshot'])) {
+                $snapshot = json_decode((string) $payment['plan_snapshot'], true);
+                if (is_array($snapshot)) {
+                    $plan = $snapshot;
+                }
+            }
+            if ($tenant !== null && $plan !== null) {
+                $license = License::extendWithPlan($pdo, $tenant, $plan);
+                if ($license === null) {
+                    $license = License::issue($pdo, (int) $tenant['id'], $plan);
+                }
+                $licenseId = (int) $license['id'];
+            }
+        } catch (Throwable) {
+            // Pembayaran tetap tercatat lunas; perpanjangan yang
+            // gagal di sini dapat diproses manual dari dashboard
+            // admin (pesanan tampil sebagai Lunas).
+        }
+
+        $paidAt = isset($payload['settlement_time'])
+            && strtotime((string) $payload['settlement_time']) !== false
+            ? date('Y-m-d H:i:s', strtotime((string) $payload['settlement_time']))
+            : date('Y-m-d H:i:s');
+        try {
+            $stmt = $pdo->prepare(
+                'UPDATE payments SET paid_at = :paid_at, license_id = :license_id WHERE id = :id'
+            );
+            $stmt->execute([
+                'paid_at' => $paidAt,
+                'license_id' => $licenseId,
+                'id' => (int) $payment['id'],
+            ]);
+        } catch (PDOException) {
+            // Pencatatan waktu lunas best-effort; status sudah 'paid'.
+        }
+    }
+
+    Json::respond(['ok' => true, 'status' => $finalStatus]);
+});
+
 $router->get('/api/automation/expiring-licenses', static function () use ($automationGuard): void {
     $pdo = $automationGuard();
 

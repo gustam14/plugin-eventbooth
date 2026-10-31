@@ -17,6 +17,9 @@
  * @var array<int, array<string, mixed>> $licenses Baris licenses + plan_name & device_count.
  * @var int|null $currentLicenseId ID lisensi yang dipakai aplikasi (currentForTenant).
  * @var array<int, array<int, array<string, mixed>>> $devicesByLicense Baris perangkat per ID lisensi.
+ * @var array<int, array<string, mixed>> $checkoutPlans Plan berbayar aktif yang dapat dibeli (M6).
+ * @var bool $midtransReady Midtrans platform sudah dikonfigurasi Super Admin (M6).
+ * @var array<int, array<string, mixed>> $orders Riwayat pesanan lisensi tenant ini (M6).
  */
 
 $title = 'Lisensi Saya';
@@ -119,4 +122,89 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
         </div>
     <?php endforeach; ?>
 <?php endif; ?>
+<div class="panel-box" style="margin-bottom: 22px;">
+    <h2 style="margin-top: 0;">Beli / Perpanjang Lisensi</h2>
+    <?php if (!($midtransReady ?? false)): ?>
+        <p class="hint">
+            Pembayaran online belum diaktifkan oleh admin. Untuk
+            perpanjangan, silakan hubungi EventBooth — masa aktifmu
+            dapat ditambahkan secara manual.
+        </p>
+    <?php elseif (($checkoutPlans ?? []) === []): ?>
+        <p class="hint">Belum ada plan berbayar yang aktif saat ini.</p>
+    <?php else: ?>
+        <p class="sub">
+            Membeli plan akan <strong>menambah masa aktif</strong>
+            lisensimu sesuai durasi plan (bukan membuat lisensi baru),
+            dan batas/fitur lisensi mengikuti plan terakhir yang dibeli.
+            Masa aktif bertambah otomatis setelah pembayaran dinyatakan
+            lunas oleh Midtrans.
+        </p>
+        <?php foreach ($checkoutPlans as $plan): ?>
+            <?php
+            $duration = (int) ($plan['license_duration_days'] ?? 0);
+            $durationLabel = $duration === 0
+                ? 'tanpa kedaluwarsa'
+                : 'masa aktif +' . $duration . ' hari';
+            ?>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--line, #e5e7eb);">
+                <div>
+                    <strong><?= e((string) $plan['name']) ?></strong><br>
+                    <span class="hint">Rp <?= e(number_format((float) $plan['price'], 0, ',', '.')) ?> · <?= e($durationLabel) ?> · maks <?= (int) ($plan['max_devices'] ?? 1) ?> perangkat</span>
+                </div>
+                <form method="post" action="/tenant/licenses/checkout"
+                      onsubmit="return confirm('Buat pesanan sebesar Rp <?= e(number_format((float) $plan['price'], 0, ',', '.')) ?> untuk plan ini?');">
+                    <?= Auth::csrfField() ?>
+                    <input type="hidden" name="plan_id" value="<?= (int) $plan['id'] ?>">
+                    <button class="btn btn-primary" type="submit">Beli Sekarang</button>
+                </form>
+            </div>
+        <?php endforeach; ?>
+    <?php endif; ?>
+</div>
+
+<?php if (($orders ?? []) !== []): ?>
+<div class="panel-box">
+    <h2 style="margin-top: 0;">Riwayat Pembayaran</h2>
+    <div class="table-wrap">
+    <table class="list">
+        <thead>
+        <tr>
+            <th>Waktu</th>
+            <th>Plan</th>
+            <th>Order ID</th>
+            <th>Jumlah</th>
+            <th>Status</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        <?php foreach ($orders as $order): ?>
+            <?php
+            $planLabel = (string) ($order['plan_name'] ?? '');
+            if ($planLabel === '' && !empty($order['plan_snapshot'])) {
+                $snap = json_decode((string) $order['plan_snapshot'], true);
+                $planLabel = is_array($snap) ? (string) ($snap['name'] ?? '') : '';
+            }
+            $canPay = (string) $order['status'] === 'pending' && !empty($order['snap_token']);
+            ?>
+            <tr>
+                <td><?= e(License::formatDateId((string) $order['created_at'])) ?></td>
+                <td><?= e($planLabel !== '' ? $planLabel : '—') ?></td>
+                <td><code><?= e((string) $order['order_id']) ?></code></td>
+                <td>Rp <?= e(number_format((float) $order['gross_amount'], 0, ',', '.')) ?></td>
+                <td><?= e(Midtrans::statusLabel((string) $order['status'])) ?></td>
+                <td>
+                    <?php if ($canPay): ?>
+                        <a class="btn btn-small btn-primary" href="/tenant/licenses/pay/<?= e((string) $order['order_id']) ?>">Bayar</a>
+                    <?php endif; ?>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+    </div>
+</div>
+<?php endif; ?>
+
 <?php require BASE_PATH . '/app/views/partials/dashboard_bottom.php'; ?>

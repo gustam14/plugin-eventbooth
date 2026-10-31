@@ -25,6 +25,7 @@ if (($user['role'] ?? '') === 'super_admin') {
         ['key' => 'plans', 'label' => 'Plan Lisensi', 'href' => '/admin/plans'],
         ['key' => 'tenants', 'label' => 'Tenant & Lisensi', 'href' => '/admin/tenants'],
         ['key' => 'drive', 'label' => 'Google Drive', 'href' => '/admin/drive'],
+        ['key' => 'payments', 'label' => 'Pembayaran', 'href' => '/admin/payments'],
         ['key' => 'account', 'label' => 'Ganti Kata Sandi', 'href' => '/account/password'],
     ];
     $navSoon = ['Pengaturan Platform'];
@@ -37,7 +38,7 @@ if (($user['role'] ?? '') === 'super_admin') {
         ['key' => 'packages', 'label' => 'Paket Sesi', 'href' => '/tenant/packages'],
         ['key' => 'account', 'label' => 'Ganti Kata Sandi', 'href' => '/account/password'],
     ];
-    $navSoon = ['Midtrans', 'Statistik'];
+    $navSoon = ['Statistik'];
 }
 ?>
 <!DOCTYPE html>

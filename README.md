@@ -412,6 +412,43 @@ event tidak disimpan — folder ditemukan kembali lewat nama
 pada setiap panggilan (operasi cari-atau-buat bersifat
 idempoten).
 
+## Milestone 6 — Checkout Lisensi Midtrans (platform)
+
+Tenant kini dapat membeli dan memperpanjang lisensi sendiri
+dengan pembayaran Midtrans milik platform:
+
+- **Migrasi wajib sekali jalan:**
+  `database/migrations/2026-11-01-m6-payments.sql` — menambah
+  kolom `plan_id` dan `plan_snapshot` pada tabel `payments`
+  (tabelnya sendiri sudah ada sejak skema awal). Sebelum migrasi
+  dijalankan, checkout menjawab dengan pesan bahwa fitur belum
+  aktif dan halaman admin menampilkan catatan migrasi.
+- **Super Admin — menu Pembayaran (`/admin/payments`):**
+  environment (Sandbox/Production), Client Key, dan Server Key
+  Midtrans platform; Server Key disimpan terenkripsi (APP_KEY)
+  dan tidak pernah ditampilkan/dikirim ke peramban. Halaman ini
+  juga menampilkan URL notifikasi yang harus didaftarkan di
+  dashboard Midtrans dan 50 pesanan lisensi terbaru semua tenant.
+- **Tenant — halaman Lisensi Saya:** seksi "Beli / Perpanjang
+  Lisensi" (plan aktif berbayar; membeli berarti menambah masa
+  aktif lisensi berjalan mengikuti aturan Tambah Masa Aktif,
+  bukan lisensi baru) dan "Riwayat Pembayaran" (pesanan pending
+  dapat dilanjutkan ke halaman bayar). Halaman bayar
+  `/tenant/licenses/pay/{order_id}` membuka popup Snap.
+- **Webhook `POST /api/payments/midtrans/notify`:** satu-satunya
+  jalur pelunasan resmi — tanda tangan SHA-512 diverifikasi
+  dengan Server Key sebelum status diubah. Saat pesanan menjadi
+  `paid` pertama kali, lisensi dipenuhi lewat
+  `License::extendWithPlan` (atau `License::issue` untuk tenant
+  yang belum pernah memiliki lisensi) dan ID lisensinya dicatat
+  di pesanan; notifikasi berulang bersifat idempoten. Callback
+  JavaScript Snap hanya mengarahkan tampilan, tidak pernah
+  dianggap bukti lunas.
+
+Uji coba: gunakan kunci Sandbox (awalan `SB-Mid-...`) dengan
+environment Sandbox, lalu bayar memakai metode uji Midtrans —
+masa aktif tenant uji harus bertambah tanpa campur tangan admin.
+
 ## Roadmap milestone
 
 - **M1 — Fondasi (selesai):** scaffold ini — router, konfigurasi
@@ -437,9 +474,9 @@ idempoten).
   perpanjangan/penangguhan/pencabutan lisensi dengan snapshot
   plan, API lisensi aplikasi booth bertanda tangan HMAC, dan
   fondasi pengingat perpanjangan (endpoint otomasi untuk n8n).
-  Checkout & perpanjangan lisensi via Midtrans platform dan
-  pembayaran tamu (Midtrans per tenant) menyusul setelah ini,
-  dengan webhook notifikasi terverifikasi tanda tangan.
+  Checkout & perpanjangan lisensi via Midtrans platform selesai
+  di M6 (lihat bagian Milestone 6 di atas); pembayaran tamu
+  (Midtrans per tenant) menyusul.
 - **M5 — Publik & sesi:** 5a selesai (event & paket tenant,
   album `/e/{slug}` dan `/s/{kode}`, `GET /api/app/events`,
   `POST /api/app/sessions`); 5b selesai (endpoint operasi
@@ -448,8 +485,10 @@ idempoten).
   registrasi media). Sisa: `/api/session/register`, berbagi
   WhatsApp via n8n/MPWA, integrasi workflow n8n
   "Plugin Eventbooth".
-- **M6 — API aplikasi booth:** aktivasi lisensi, konfigurasi
-  bertanda tangan, heartbeat hemat (blueprint §2).
+- **M6 — Checkout lisensi Midtrans (selesai):** lihat bagian
+  Milestone 6 di atas. API aplikasi booth (aktivasi lisensi,
+  sesi login akun, heartbeat perangkat) sudah dikirim lebih awal
+  pada M4/M4c.
 
-Endpoint M2–M6 sudah dipasang sebagai stub `501 not_implemented`
-di `public/index.php` agar jalur API-nya tidak berubah lagi.
+Jalur API M1–M6 di `public/index.php` sudah terimplementasi
+penuh; tidak ada lagi stub `501` yang tersisa untuk cakupan ini.

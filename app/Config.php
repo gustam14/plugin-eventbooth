@@ -10,13 +10,13 @@ final class Config
     /** Versi aplikasi; naikkan setiap milestone. */
     public static function appVersion(): string
     {
-        return '0.7.3';
+        return '0.8.0';
     }
 
-    /** Nomor milestone blueprint yang sedang berjalan (5 = Event, Paket, Album & API Sesi). */
+    /** Nomor milestone blueprint yang sedang berjalan (6 = Checkout Lisensi Midtrans). */
     public static function milestone(): int
     {
-        return 5;
+        return 6;
     }
 
     /**
