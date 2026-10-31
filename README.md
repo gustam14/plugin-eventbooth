@@ -193,7 +193,10 @@ Admin mengelola pembeli lisensi dan lisensinya:
   ikut dikembalikan sebagai field `sender` pada respons
   `expiring-licenses`, jadi workflow mengambilnya otomatis
   setiap berjalan — mengganti nomor pengirim cukup dari
-  dashboard, tanpa mengubah workflow.
+  dashboard, tanpa mengubah workflow. Teks pesannya memakai
+  templat profesional berformat WhatsApp (salam + blok
+  *Detail Lisensi* + ajakan perpanjangan + tanda tangan
+  Tim EventBooth; v0.7.3, disetujui pemilik).
 
 **Wajib sebelum memakai menu Tenant & Lisensi:** jalankan migrasi
 M4 sekali di phpMyAdmin —

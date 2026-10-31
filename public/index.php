@@ -2624,10 +2624,18 @@ $router->get('/api/automation/expiring-licenses', static function () use ($autom
                     'expires_at' => (string) $row['expires_at'],
                     'days_left' => $daysLeft,
                     'threshold_days' => $threshold,
-                    'message' => 'Halo ' . $vendor . ', lisensi Plugin Eventbooth Anda (plan '
-                        . (string) ($row['plan_name'] ?? '') . ') akan berakhir pada ' . $tanggal
-                        . ' (' . $daysLeft . ' hari lagi). Silakan hubungi EventBooth untuk '
-                        . 'perpanjangan agar layanan booth Anda tidak terganggu. Terima kasih.',
+                    // Teks pesan profesional (v0.7.3, disetujui
+                    // pemilik): tanda *...* menjadi huruf tebal di
+                    // WhatsApp.
+                    'message' => 'Halo *' . $vendor . "*,\n\n"
+                        . "Kami dari *EventBooth* mengingatkan bahwa lisensi Plugin Eventbooth Anda akan segera berakhir.\n\n"
+                        . "*Detail Lisensi*\n"
+                        . 'Plan: ' . (string) ($row['plan_name'] ?? '') . "\n"
+                        . 'Berakhir: ' . $tanggal . "\n"
+                        . 'Sisa waktu: ' . $daysLeft . " hari lagi\n\n"
+                        . "Agar layanan booth Anda tidak terganggu, silakan lakukan perpanjangan sebelum tanggal tersebut — cukup balas pesan ini atau hubungi admin EventBooth.\n\n"
+                        . "Terima kasih telah mempercayakan booth Anda kepada EventBooth.\n\n"
+                        . "Salam,\n*Tim EventBooth*",
                 ];
             }
         }
