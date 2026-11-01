@@ -96,38 +96,14 @@ $selectedDrive = (string) ($values['drive_account_id'] ?? 'auto');
         </div>
 
         <div class="field">
-            <label for="drive_account_id">Akun Penyimpanan (Drive Platform)</label>
-            <select id="drive_account_id" name="drive_account_id">
-                <option value="auto"<?= $selectedDrive === 'auto' ? ' selected' : '' ?>>
-                    Otomatis — akun dengan sisa kuota paling lega
-                </option>
-                <option value=""<?= $selectedDrive === '' ? ' selected' : '' ?>>
-                    Tanpa akun penyimpanan (upload &amp; album tidak berjalan)
-                </option>
-                <?php foreach (($driveAccounts ?? []) as $account): ?>
-                    <?php
-                    $accountId = (string) (int) $account['id'];
-                    $accountLabel = trim((string) ($account['label'] ?? '')) !== ''
-                        ? (string) $account['label']
-                        : (string) ($account['google_email'] ?? '');
-                    $quotaNote = '';
-                    if (($account['quota_total_bytes'] ?? null) !== null && ($account['quota_used_bytes'] ?? null) !== null) {
-                        $free = (int) $account['quota_total_bytes'] - (int) $account['quota_used_bytes'];
-                        $quotaNote = ' — sisa ' . $fmtGb(max(0, $free));
-                    }
-                    ?>
-                    <option value="<?= e($accountId) ?>"<?= $selectedDrive === $accountId ? ' selected' : '' ?>>
-                        <?= e($accountLabel) ?><?= e($quotaNote) ?><?= !empty($account['is_default']) ? ' (default)' : '' ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            <div class="hint">
-                Berkas event disimpan terpusat di akun penyimpanan platform yang diatur Super Admin.
+            <div class="hint" style="margin: 0;">
+                Penyimpanan album diatur otomatis oleh sistem dari akun penyimpanan platform —
+                Anda tidak perlu memilih apa pun di sini.
                 <?php if (($driveAccounts ?? []) === []): ?>
-                    Saat ini belum ada akun yang terhubung — event tetap bisa dibuat, tetapi upload belum berjalan.
+                    Saat ini akun penyimpanan belum terhubung oleh admin — event tetap bisa dibuat,
+                    tetapi upload album baru berjalan setelah admin menghubungkannya.
                 <?php endif; ?>
             </div>
-            <?= $err('drive_account_id') ?>
         </div>
 
         <fieldset>

@@ -405,6 +405,44 @@ final class License
         return ['days' => $ent['retention_days'], 'plan_name' => $ent['plan_name']];
     }
 
+    /**
+     * Penyesuaian manual Super Admin (v0.20.0): tetapkan
+     * tanggal berakhir persis dan/atau timpa nilai snapshot
+     * plan (retensi, batas event, kuota sesi/Drive,
+     * perangkat) untuk lisensi ini saja — plan global dan
+     * tenant lain tidak berubah. Kolom max_devices lisensi
+     * diselaraskan dengan snapshot.
+     *
+     * @param array<string, int> $snapshotPatch Kunci snapshot yang ditimpa.
+     */
+    public static function manualAdjust(PDO $pdo, int $licenseId, ?string $expiresAt, array $snapshotPatch): void
+    {
+        $license = self::find($pdo, $licenseId);
+        if ($license === null) {
+            throw new RuntimeException('Lisensi tidak ditemukan.');
+        }
+        $snapshot = self::snapshotOf($license) ?? [];
+        foreach (['retention_days', 'max_events', 'session_quota', 'drive_quota_gb', 'max_devices'] as $key) {
+            if (array_key_exists($key, $snapshotPatch)) {
+                $snapshot[$key] = max(0, (int) $snapshotPatch[$key]);
+            }
+        }
+        $maxDevices = isset($snapshot['max_devices'])
+            ? (int) $snapshot['max_devices']
+            : (int) ($license['max_devices'] ?? 1);
+        $stmt = $pdo->prepare(
+            'UPDATE licenses
+                SET expires_at = :expires_at, plan_snapshot = :snapshot, max_devices = :max_devices
+              WHERE id = :id'
+        );
+        $stmt->execute([
+            'expires_at' => $expiresAt,
+            'snapshot' => json_encode($snapshot, JSON_UNESCAPED_SLASHES),
+            'max_devices' => $maxDevices,
+            'id' => $licenseId,
+        ]);
+    }
+
     /** Susun snapshot dari baris plan (dipakai saat penerbitan). */
     public static function snapshotFromPlan(array $plan): array
     {

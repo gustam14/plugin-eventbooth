@@ -224,6 +224,7 @@ CREATE TABLE events (
     session_quota_limit  INT NULL COMMENT 'Terpakai bila limit_mode = session_quota',
     status               ENUM('draft','active','finished','archived') NOT NULL DEFAULT 'draft',
     expires_at           DATETIME NULL COMMENT 'Album kedaluwarsa/retensi',
+    retention_override_days INT NULL DEFAULT NULL COMMENT 'Override retensi album (hari) per event; NULL = ikut plan tenant (v0.20.0)',
     created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),

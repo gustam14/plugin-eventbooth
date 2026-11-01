@@ -466,13 +466,26 @@ final class Album
      */
     public static function retentionSessions(PDO $pdo, string $mode, int $limit = 100): array
     {
-        $stmt = $pdo->query(
-            'SELECT s.id AS session_id, s.code AS session_code, s.created_at,
-                    e.id AS event_id, e.name AS event_name, e.tenant_id AS tenant_id
-               FROM sessions s
-               JOIN events e ON e.id = s.event_id
-              ORDER BY s.created_at ASC'
-        );
+        // Override retensi per event (v0.20.0) didahulukan dari
+        // retensi plan; kueri toleran terhadap kolom yang
+        // belum dimigrasi (mundur ke tanpa override).
+        $columns = 's.id AS session_id, s.code AS session_code, s.created_at,
+                    e.id AS event_id, e.name AS event_name, e.tenant_id AS tenant_id';
+        try {
+            $stmt = $pdo->query(
+                'SELECT ' . $columns . ', e.retention_override_days AS retention_override
+                   FROM sessions s
+                   JOIN events e ON e.id = s.event_id
+                  ORDER BY s.created_at ASC'
+            );
+        } catch (PDOException) {
+            $stmt = $pdo->query(
+                'SELECT ' . $columns . ', NULL AS retention_override
+                   FROM sessions s
+                   JOIN events e ON e.id = s.event_id
+                  ORDER BY s.created_at ASC'
+            );
+        }
 
         $out = [];
         $cache = [];
@@ -481,7 +494,9 @@ final class Album
             if (!array_key_exists($tenantId, $cache)) {
                 $cache[$tenantId] = License::retentionOf($pdo, $tenantId);
             }
-            $ret = (int) $cache[$tenantId]['days'];
+            $ret = $row['retention_override'] !== null
+                ? (int) $row['retention_override']
+                : (int) $cache[$tenantId]['days'];
             if ($ret <= 0) {
                 continue;
             }
@@ -508,6 +523,7 @@ final class Album
                 'event_name' => (string) $row['event_name'],
                 'tenant_id' => $tenantId,
                 'retention_days' => $ret,
+                'retention_overridden' => $row['retention_override'] !== null,
                 'plan_name' => (string) $cache[$tenantId]['plan_name'],
                 'age_days' => $age,
                 'media_count' => (int) $agg['c'],

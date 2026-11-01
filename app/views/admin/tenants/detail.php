@@ -180,6 +180,65 @@ $roleLabel = static function (string $role): string {
         </form>
     </div>
 
+    <?php if (($liveLicense ?? null) !== null && ($liveEntitlements ?? null) !== null): ?>
+    <div style="border: 1px solid var(--line, #262B33); border-radius: 14px; padding: 16px; margin-bottom: 22px;">
+        <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 6px;">Pengaturan Manual Lisensi</h3>
+        <p class="hint" style="margin-bottom: 12px;">
+            Tetapkan tanggal masa aktif secara persis dan timpa detail plan
+            <strong>hanya untuk tenant ini</strong> (tersimpan di snapshot lisensinya) —
+            plan global dan tenant lain tidak berubah. Angka 0 berarti tanpa batas
+            (khusus retensi: 0 = album tidak pernah dibersihkan).
+        </p>
+        <?php if ((string) ($liveLicense['status'] ?? '') === 'revoked'): ?>
+            <p class="hint" style="margin: 0;">
+                Lisensi tenant ini berstatus <strong>dicabut</strong> — hidupkan dulu lewat
+                Tambah Masa Aktif di atas sebelum mengatur manual.
+            </p>
+        <?php else: ?>
+        <form method="post" action="/admin/tenants/<?= $tenantId ?>/license-manual">
+            <?= Auth::csrfField() ?>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+                <div class="field" style="flex: 1 1 170px; margin-bottom: 0;">
+                    <label for="manual_expires">Masa aktif berakhir</label>
+                    <input type="date" id="manual_expires" name="expires_date"
+                           value="<?= e(!empty($liveLicense['expires_at']) ? substr((string) $liveLicense['expires_at'], 0, 10) : '') ?>">
+                    <label class="hint" style="display: flex; gap: 6px; align-items: center; margin-top: 6px;">
+                        <input type="checkbox" name="no_expiry" value="1" <?= empty($liveLicense['expires_at']) ? 'checked' : '' ?>>
+                        Tanpa kedaluwarsa
+                    </label>
+                </div>
+                <div class="field" style="flex: 1 1 120px; margin-bottom: 0;">
+                    <label for="manual_retention">Retensi album (hari)</label>
+                    <input type="number" id="manual_retention" name="retention_days" min="0" step="1"
+                           value="<?= (int) ($liveEntitlements['retention_days'] ?? 0) ?>">
+                </div>
+                <div class="field" style="flex: 1 1 120px; margin-bottom: 0;">
+                    <label for="manual_max_events">Maks event</label>
+                    <input type="number" id="manual_max_events" name="max_events" min="0" step="1"
+                           value="<?= (int) ($liveEntitlements['max_events'] ?? 0) ?>">
+                </div>
+                <div class="field" style="flex: 1 1 120px; margin-bottom: 0;">
+                    <label for="manual_session_quota">Kuota sesi</label>
+                    <input type="number" id="manual_session_quota" name="session_quota" min="0" step="1"
+                           value="<?= (int) ($liveEntitlements['session_quota'] ?? 0) ?>">
+                </div>
+                <div class="field" style="flex: 1 1 120px; margin-bottom: 0;">
+                    <label for="manual_drive_quota">Kuota Drive (GB)</label>
+                    <input type="number" id="manual_drive_quota" name="drive_quota_gb" min="0" step="1"
+                           value="<?= (int) ($liveEntitlements['drive_quota_gb'] ?? 0) ?>">
+                </div>
+                <div class="field" style="flex: 1 1 120px; margin-bottom: 0;">
+                    <label for="manual_max_devices">Maks perangkat</label>
+                    <input type="number" id="manual_max_devices" name="max_devices" min="0" step="1"
+                           value="<?= (int) ($liveEntitlements['max_devices'] ?? 1) ?>">
+                </div>
+                <button class="btn btn-primary" type="submit">Simpan Pengaturan Manual</button>
+            </div>
+        </form>
+        <?php endif; ?>
+    </div>
+    <?php endif; ?>
+
     <?php if (($liveLicense ?? null) !== null): ?>
         <p class="hint" style="margin-bottom: 20px;">
             Satu akun hanya memiliki satu lisensi. Lisensi yang masa aktifnya

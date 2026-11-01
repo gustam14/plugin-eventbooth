@@ -168,52 +168,20 @@ final class Event
     }
 
     /**
-     * Selesaikan pilihan "auto": akun terhubung dengan sisa kuota
-     * (total - terpakai) paling lega. Kuota NULL = belum terukur:
-     * akun berkuota terukur selalu didahulukan; bila semua tidak
-     * terukur (atau sisa kuota seri), akun default yang menang,
-     * selain itu akun terhubung pertama.
+     * Selesaikan penugasan otomatis: akun terhubung yang
+     * pertama dikaitkan Super Admin (keputusan pemilik
+     * v0.20.0 — sebelumnya: sisa kuota paling lega).
      *
      * @param array<int, array<string, mixed>> $connected Hasil connectedAccounts().
      * @return array<string, mixed>|null
      */
     public static function pickDriveAccount(array $connected): ?array
     {
-        if ($connected === []) {
-            return null;
-        }
-
-        $best = null;
-        $bestFree = null;
-        foreach ($connected as $account) {
-            $total = $account['quota_total_bytes'] ?? null;
-            $used = $account['quota_used_bytes'] ?? null;
-            if ($total === null || $used === null) {
-                continue; // Kuota belum terukur: bukan kandidat utama.
-            }
-            $free = (int) $total - (int) $used;
-            if (
-                $bestFree === null
-                || $free > $bestFree
-                || ($free === $bestFree
-                    && !empty($account['is_default'])
-                    && empty($best['is_default'] ?? 0))
-            ) {
-                $best = $account;
-                $bestFree = $free;
-            }
-        }
-        if ($best !== null) {
-            return $best;
-        }
-
-        foreach ($connected as $account) {
-            if (!empty($account['is_default'])) {
-                return $account;
-            }
-        }
-
-        return $connected[0];
+        // Keputusan pemilik (v0.20.0): penugasan otomatis =
+        // akun terhubung yang PERTAMA dikaitkan Super Admin.
+        // connectedAccounts() mewarisi urutan id ASC dari
+        // GoogleAccount::all() = urutan pengaitan.
+        return $connected[0] ?? null;
     }
 
     /* -----------------------------------------------------------------
@@ -223,12 +191,13 @@ final class Event
     /**
      * Validasi + normalisasi isian formulir event.
      *
-     * Kolom 'drive_account_id' pada $input memakai nilai khusus:
-     * 'auto' (selesaikan sekarang), '' (tanpa akun), atau ID akun
-     * terhubung. Hasil ternormalisasi memuat 'drive_account_id'
-     * (?int) dan penanda 'drive_auto_missing' (bool) — true bila
-     * mode auto tidak menemukan akun terhubung sama sekali, agar
-     * pemanggil bisa memberi peringatan ke pengguna.
+     * Akun penyimpanan TIDAK lagi dipilih lewat formulir
+     * (v0.20.0): event baru otomatis memakai akun terhubung
+     * pertama; event lama mempertahankan akunnya. Hasil
+     * ternormalisasi memuat 'drive_account_id' (?int) dan
+     * penanda 'drive_auto_missing' (bool) — true bila tidak
+     * ada akun terhubung sama sekali, agar pemanggil bisa
+     * memberi peringatan ke pengguna.
      *
      * @param array<string, mixed>      $input    Isi $_POST.
      * @param array<string, mixed>|null $existing Baris event (mode ubah) atau null (mode buat).
@@ -297,9 +266,18 @@ final class Event
         $data['status'] = in_array($status, self::STATUSES, true) ? $status : 'draft';
 
         // --- Akun Drive penampung ---------------------------------------
-        $driveRaw = trim((string) ($input['drive_account_id'] ?? 'auto'));
+        // Keputusan pemilik (v0.20.0): tenant TIDAK memilih akun
+        // penyimpanan. Event baru otomatis memakai akun terhubung
+        // yang PERTAMA dikaitkan Super Admin (urutan id); event
+        // yang sudah punya akun mempertahankannya (terkunci per
+        // event). Pilihan manual hanya ada di panel Super Admin.
         $data['drive_auto_missing'] = false;
-        if ($driveRaw === 'auto') {
+        $existingAccount = ($existing !== null && !empty($existing['drive_account_id']))
+            ? (int) $existing['drive_account_id']
+            : null;
+        if ($existingAccount !== null) {
+            $data['drive_account_id'] = $existingAccount;
+        } else {
             try {
                 $picked = self::pickDriveAccount(self::connectedAccounts($pdo));
             } catch (PDOException) {
@@ -307,24 +285,6 @@ final class Event
             }
             $data['drive_account_id'] = $picked !== null ? (int) $picked['id'] : null;
             $data['drive_auto_missing'] = $picked === null;
-        } elseif ($driveRaw === '') {
-            $data['drive_account_id'] = null;
-        } elseif (preg_match('/^\d+$/', $driveRaw) === 1) {
-            $account = null;
-            try {
-                $account = GoogleAccount::find($pdo, (int) $driveRaw);
-            } catch (PDOException) {
-                $account = null;
-            }
-            if ($account === null || (string) ($account['status'] ?? '') !== 'connected') {
-                $errors['drive_account_id'] = 'Akun penyimpanan yang dipilih tidak terhubung.';
-                $data['drive_account_id'] = null;
-            } else {
-                $data['drive_account_id'] = (int) $account['id'];
-            }
-        } else {
-            $errors['drive_account_id'] = 'Pilihan akun penyimpanan tidak sah.';
-            $data['drive_account_id'] = null;
         }
 
         // --- Kunci pembayaran -------------------------------------------

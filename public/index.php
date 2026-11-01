@@ -1477,6 +1477,7 @@ $router->get('/admin/tenants/{id}', static function (array $params): void {
         'tenantUsers' => $tenantUsers,
         'licenses' => $licenses,
         'liveLicense' => $liveLicense,
+        'liveEntitlements' => $liveLicense !== null ? License::entitlements($liveLicense) : null,
         'devicesByLicense' => $devicesByLicense,
         'activePlans' => $activePlans,
         'newKey' => is_string($newKey) ? $newKey : null,
@@ -1752,6 +1753,88 @@ $router->post('/admin/tenants/{id}/extend', static function (array $params): voi
 
     Flash::success('Lisensi baru diterbitkan untuk ' . $vendor . ' dengan plan ' . (string) $plan['name'] . ' (tenant belum memiliki lisensi).');
     redirect('/admin/tenants/' . $id);
+});
+
+/**
+ * Pengaturan lisensi manual (v0.20.0): Super Admin
+ * menetapkan tanggal masa aktif persis dan menimpa
+ * detail snapshot plan (retensi, batas event, kuota
+ * sesi/Drive, perangkat) untuk tenant ini saja.
+ */
+$router->post('/admin/tenants/{id}/license-manual', static function (array $params): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel, pengaturan manual belum dapat disimpan.');
+        redirect('/admin');
+    }
+
+    $id = (int) ($params['id'] ?? 0);
+    $tenant = Tenant::find($pdo, $id);
+    if ($tenant === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+    $back = '/admin/tenants/' . $id;
+
+    $license = License::liveForTenant($pdo, $id);
+    if ($license === null) {
+        Flash::error('Tenant ini belum memiliki lisensi — terbitkan dulu lewat Tambah Masa Aktif.');
+        redirect($back);
+    }
+    if ((string) ($license['status'] ?? '') === 'revoked') {
+        Flash::error('Lisensi tenant ini berstatus dicabut — hidupkan dulu lewat Tambah Masa Aktif, baru atur manual.');
+        redirect($back);
+    }
+
+    $patch = [];
+    foreach (['retention_days', 'max_events', 'session_quota', 'drive_quota_gb', 'max_devices'] as $field) {
+        $raw = trim((string) ($_POST[$field] ?? ''));
+        if (preg_match('/^\d+$/', $raw) !== 1) {
+            Flash::error('Semua kolom angka pengaturan manual wajib bilangan bulat 0 atau lebih.');
+            redirect($back);
+        }
+        $patch[$field] = (int) $raw;
+    }
+
+    $expiresAt = isset($license['expires_at']) && $license['expires_at'] !== null
+        ? (string) $license['expires_at']
+        : null;
+    if (!empty($_POST['no_expiry'])) {
+        $expiresAt = null;
+    } else {
+        $dateRaw = trim((string) ($_POST['expires_date'] ?? ''));
+        if ($dateRaw !== '') {
+            $ts = strtotime($dateRaw);
+            if ($ts === false) {
+                Flash::error('Tanggal masa aktif tidak sah.');
+                redirect($back);
+            }
+            $expiresAt = date('Y-m-d', $ts) . ' 23:59:59';
+        }
+    }
+
+    try {
+        License::manualAdjust($pdo, (int) $license['id'], $expiresAt, $patch);
+    } catch (PDOException) {
+        Flash::error('Pengaturan manual gagal disimpan. Pastikan migrasi Milestone 4 sudah dijalankan.');
+        redirect($back);
+    } catch (RuntimeException) {
+        Flash::error('Pengaturan manual gagal disimpan. Silakan coba lagi.');
+        redirect($back);
+    }
+
+    $until = $expiresAt === null ? 'tanpa kedaluwarsa' : License::formatDateId($expiresAt);
+    Flash::success(
+        'Pengaturan manual tersimpan untuk ' . Tenant::displayName($tenant)
+        . ': masa aktif hingga ' . $until . ', retensi album ' . $patch['retention_days'] . ' hari.'
+    );
+    redirect($back);
 });
 
 $router->post('/admin/licenses/{id}/renew', static function (array $params): void {
@@ -3431,7 +3514,7 @@ $router->post('/api/automation/purge-session', static function () use ($automati
     }
 
     $tenantId = (int) ($session['event_tenant_id'] ?? 0);
-    $retention = License::retentionOf($pdo, $tenantId);
+    $retention = Retention::forEvent($pdo, $session);
     $retDays = (int) $retention['days'];
     if ($retDays <= 0) {
         Json::respond(['status' => 'ok', 'purged' => false, 'reason' => 'no_retention']);
@@ -4491,14 +4574,14 @@ $router->get('/tenant/events/{id}/album', static function (array $params) use ($
         $sessions = [];
     }
 
-    // Retensi plan tenant (v0.17.0): dasar kode warna sesi
-    // yang mendekati masa hapus di Kelola Album. 0 = tanpa
-    // retensi (tidak ada penandaan).
-    $retention = ['days' => 0, 'plan_name' => ''];
+    // Retensi efektif event ini (v0.17.0; override per
+    // event v0.20.0): dasar kode warna sesi yang mendekati
+    // masa hapus di Kelola Album. 0 = tanpa retensi.
+    $retention = ['days' => 0, 'plan_name' => '', 'overridden' => false];
     try {
-        $retention = License::retentionOf($pdo, $tenantId);
+        $retention = Retention::forEvent($pdo, $event);
     } catch (PDOException) {
-        $retention = ['days' => 0, 'plan_name' => ''];
+        $retention = ['days' => 0, 'plan_name' => '', 'overridden' => false];
     }
 
     View::render('tenant/events/album', [
@@ -4510,7 +4593,386 @@ $router->get('/tenant/events/{id}/album', static function (array $params) use ($
         'sessionsData' => $sessions,
         'retentionDays' => (int) $retention['days'],
         'retentionPlan' => (string) $retention['plan_name'],
+        'retentionOverridden' => (bool) ($retention['overridden'] ?? false),
     ]);
+});
+
+/* ---------------------------------------------------------------------
+ * Area Super Admin — Event semua tenant (v0.20.0, permintaan
+ * pemilik): Super Admin mengontrol & mengelola event para
+ * tenant — status/tanggal, retensi per event, akun
+ * penyimpanan, isi album, dan unduhan ZIP. Rute didaftarkan
+ * di sini agar dapat memakai closure Drive/album di atas.
+ * ------------------------------------------------------------------- */
+$router->get('/admin/events', static function (): void {
+    $user = Auth::requireRole('super_admin');
+
+    $events = [];
+    $retentionByTenant = [];
+    $pdo = Database::pdo();
+    if ($pdo !== null) {
+        try {
+            $stmt = $pdo->query(
+                'SELECT e.*, t.vendor_name, t.name AS tenant_name,
+                        (SELECT COUNT(*) FROM sessions s WHERE s.event_id = e.id) AS session_count,
+                        (SELECT MIN(s.created_at) FROM sessions s WHERE s.event_id = e.id) AS first_session_at,
+                        (SELECT COUNT(*) FROM media_files m WHERE m.event_id = e.id) AS media_count
+                   FROM events e
+                   JOIN tenants t ON t.id = e.tenant_id
+                  ORDER BY e.id DESC'
+            );
+            $events = $stmt->fetchAll();
+            foreach ($events as $ev) {
+                $tid = (int) $ev['tenant_id'];
+                if (!array_key_exists($tid, $retentionByTenant)) {
+                    $retentionByTenant[$tid] = License::retentionOf($pdo, $tid);
+                }
+            }
+        } catch (PDOException) {
+            $events = [];
+        }
+    }
+
+    View::render('admin/events/index', [
+        'appName' => Config::appName(),
+        'appUrl' => Config::appUrl(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'events' => $events,
+        'retentionByTenant' => $retentionByTenant,
+    ]);
+});
+
+$router->get('/admin/events/{id}', static function (array $params): void {
+    $user = Auth::requireRole('super_admin');
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel.');
+        redirect('/admin');
+    }
+    $event = null;
+    try {
+        $event = Event::find($pdo, (int) ($params['id'] ?? 0));
+    } catch (PDOException) {
+        $event = null;
+    }
+    if ($event === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $tenant = null;
+    $sessions = [];
+    $driveAccounts = [];
+    $retention = ['days' => 0, 'plan_name' => '', 'overridden' => false];
+    try {
+        $tenant = Tenant::find($pdo, (int) $event['tenant_id']);
+        $stmt = $pdo->prepare(
+            'SELECT * FROM sessions WHERE event_id = :event ORDER BY created_at DESC, id DESC'
+        );
+        $stmt->execute(['event' => (int) $event['id']]);
+        foreach ($stmt->fetchAll() as $session) {
+            $media = Album::mediaForSession($pdo, (int) $session['id']);
+            $sessions[] = [
+                'session' => $session,
+                'media' => array_slice($media, 0, 120),
+                'media_total' => count($media),
+            ];
+        }
+        $driveAccounts = Event::connectedAccounts($pdo);
+        $retention = Retention::forEvent($pdo, $event);
+    } catch (PDOException) {
+        // Halaman tetap tampil dengan data seadanya.
+    }
+
+    View::render('admin/events/manage', [
+        'appName' => Config::appName(),
+        'appUrl' => Config::appUrl(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'event' => $event,
+        'tenant' => $tenant,
+        'sessionsData' => $sessions,
+        'driveAccounts' => $driveAccounts,
+        'retentionDays' => (int) $retention['days'],
+        'retentionPlan' => (string) $retention['plan_name'],
+        'retentionOverridden' => (bool) $retention['overridden'],
+    ]);
+});
+
+$router->post('/admin/events/{id}/settings', static function (array $params): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel.');
+        redirect('/admin');
+    }
+    $event = null;
+    try {
+        $event = Event::find($pdo, (int) ($params['id'] ?? 0));
+    } catch (PDOException) {
+        $event = null;
+    }
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/admin/events');
+    }
+    $back = '/admin/events/' . (int) $event['id'];
+
+    $status = (string) ($_POST['status'] ?? '');
+    if (!in_array($status, Event::STATUSES, true)) {
+        Flash::error('Status event tidak sah.');
+        redirect($back);
+    }
+    $parse = static function (string $raw): ?string {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return null;
+        }
+        $ts = strtotime(str_replace('T', ' ', $raw));
+
+        return $ts === false ? null : date('Y-m-d H:i:s', $ts);
+    };
+    $startsRaw = (string) ($_POST['starts_at'] ?? '');
+    $endsRaw = (string) ($_POST['ends_at'] ?? '');
+    $startsAt = $parse($startsRaw);
+    $endsAt = $parse($endsRaw);
+    if (($startsRaw !== '' && $startsAt === null) || ($endsRaw !== '' && $endsAt === null)) {
+        Flash::error('Format tanggal tidak sah.');
+        redirect($back);
+    }
+    if ($startsAt !== null && $endsAt !== null && strtotime($endsAt) < strtotime($startsAt)) {
+        Flash::error('Tanggal selesai tidak boleh sebelum tanggal mulai.');
+        redirect($back);
+    }
+
+    try {
+        Event::updateScheduleStatus($pdo, (int) $event['id'], $startsAt, $endsAt, $status);
+    } catch (PDOException) {
+        Flash::error('Pengaturan event gagal disimpan.');
+        redirect($back);
+    }
+
+    // Retensi per event: kosong = ikut plan; angka = override.
+    $retRaw = trim((string) ($_POST['retention_days'] ?? ''));
+    if ($retRaw !== '' && preg_match('/^\d+$/', $retRaw) !== 1) {
+        Flash::error('Retensi harus bilangan bulat 0 atau lebih (atau kosongkan untuk ikut plan).');
+        redirect($back);
+    }
+    try {
+        Retention::saveOverride($pdo, (int) $event['id'], $retRaw === '' ? null : (int) $retRaw);
+    } catch (PDOException) {
+        Flash::error('Status & tanggal tersimpan, tetapi retensi per event belum bisa disimpan — jalankan migrasi database/migrations/2026-11-01-retention-override.sql di phpMyAdmin dulu.');
+        redirect($back);
+    }
+
+    // Akun penyimpanan: hanya Super Admin yang boleh memindah.
+    $driveRaw = (string) ($_POST['drive_account_id'] ?? 'keep');
+    if ($driveRaw !== 'keep') {
+        try {
+            if ($driveRaw === 'auto') {
+                $picked = Event::pickDriveAccount(Event::connectedAccounts($pdo));
+                $newAccount = $picked !== null ? (int) $picked['id'] : null;
+            } elseif (preg_match('/^\d+$/', $driveRaw) === 1) {
+                $account = GoogleAccount::find($pdo, (int) $driveRaw);
+                if ($account === null || (string) ($account['status'] ?? '') !== 'connected') {
+                    Flash::error('Akun penyimpanan yang dipilih tidak terhubung.');
+                    redirect($back);
+                }
+                $newAccount = (int) $driveRaw;
+            } else {
+                $newAccount = (int) ($event['drive_account_id'] ?? 0) ?: null;
+            }
+            $stmt = $pdo->prepare('UPDATE events SET drive_account_id = :account WHERE id = :id');
+            $stmt->execute(['account' => $newAccount, 'id' => (int) $event['id']]);
+        } catch (PDOException) {
+            Flash::error('Akun penyimpanan gagal diubah.');
+            redirect($back);
+        }
+    }
+
+    Flash::success('Pengaturan event "' . (string) ($event['name'] ?? '') . '" diperbarui.');
+    redirect($back);
+});
+
+$router->post('/admin/events/{id}/album/media/{mediaId}/delete', static function (array $params) use ($deleteOneMedia): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        redirect('/admin');
+    }
+    $event = Event::find($pdo, (int) ($params['id'] ?? 0));
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/admin/events');
+    }
+    $back = '/admin/events/' . (int) $event['id'];
+    try {
+        $media = Album::mediaById($pdo, (int) ($params['mediaId'] ?? 0));
+        if ($media === null || (int) ($media['event_id'] ?? 0) !== (int) $event['id']) {
+            Flash::error('Berkas tidak ditemukan pada event ini.');
+            redirect($back);
+        }
+        $deleteOneMedia($pdo, $event, $media);
+        Flash::success('Berkas terhapus dari galeri dan penyimpanan.');
+    } catch (GoogleDriveException) {
+        Flash::error('Berkas gagal dihapus dari penyimpanan — berkas tetap dipertahankan di galeri.');
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+    } catch (PDOException) {
+        Flash::error('Berkas gagal dihapus.');
+    }
+    redirect($back);
+});
+
+$router->post('/admin/events/{id}/album/sessions/{sessionId}/delete', static function (array $params) use ($deleteOneMedia): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        redirect('/admin');
+    }
+    $event = Event::find($pdo, (int) ($params['id'] ?? 0));
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/admin/events');
+    }
+    $back = '/admin/events/' . (int) $event['id'];
+    $sessionId = (int) ($params['sessionId'] ?? 0);
+    try {
+        $session = Album::sessionWithEvent($pdo, $sessionId);
+        if ($session === null || (int) ($session['event_id'] ?? 0) !== (int) $event['id']) {
+            Flash::error('Sesi tidak ditemukan pada event ini.');
+            redirect($back);
+        }
+        foreach (Album::mediaForSession($pdo, $sessionId) as $media) {
+            $deleteOneMedia($pdo, $event, $media);
+        }
+        $pdo->prepare('DELETE FROM sessions WHERE id = :id')->execute(['id' => $sessionId]);
+        Flash::success('Sesi ' . (string) ($session['code'] ?? '') . ' beserta berkasnya terhapus.');
+    } catch (GoogleDriveException) {
+        Flash::error('Sebagian berkas gagal dihapus dari penyimpanan — sesi dipertahankan agar tidak hilang setengah.');
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+    } catch (PDOException) {
+        Flash::error('Sesi gagal dihapus.');
+    }
+    redirect($back);
+});
+
+$router->get('/admin/events/{id}/download', static function (array $params) use ($driveTokenForAccount): void {
+    $user = Auth::requireRole('super_admin');
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        redirect('/admin');
+    }
+    $event = Event::find($pdo, (int) ($params['id'] ?? 0));
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/admin/events');
+    }
+    $back = '/admin/events/' . (int) $event['id'];
+    set_time_limit(0);
+
+    try {
+        $stmt = $pdo->prepare(
+            'SELECT s.*, e.drive_account_id AS event_drive_account_id
+               FROM sessions s
+               JOIN events e ON e.id = s.event_id
+              WHERE s.event_id = :event
+              ORDER BY s.created_at ASC, s.id ASC'
+        );
+        $stmt->execute(['event' => (int) $event['id']]);
+        $groups = [];
+        foreach ($stmt->fetchAll() as $sessionRow) {
+            $groups[] = [
+                'session' => $sessionRow,
+                'media' => Album::mediaForSession($pdo, (int) $sessionRow['id']),
+            ];
+        }
+        $tokens = [];
+        $tokenFor = static function (int $accountId) use ($pdo, $driveTokenForAccount, &$tokens): string {
+            if (!isset($tokens[$accountId])) {
+                [, $token] = $driveTokenForAccount($pdo, $accountId);
+                $tokens[$accountId] = $token;
+            }
+            return $tokens[$accountId];
+        };
+        $prepared = AlbumZip::prepareAlbum($groups, $tokenFor);
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+        redirect($back);
+    } catch (PDOException) {
+        Flash::error('Unduhan album belum dapat diproses.');
+        redirect($back);
+    }
+
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    $slug = preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) ($event['slug'] ?? 'event')) ?? 'event';
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="album-' . $slug . '.zip"');
+    header('X-Content-Type-Options: nosniff');
+    AlbumZip::send($prepared);
+});
+
+$router->get('/admin/events/{id}/sessions/{sessionId}/download', static function (array $params) use ($driveTokenForAccount): void {
+    $user = Auth::requireRole('super_admin');
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        redirect('/admin');
+    }
+    $event = Event::find($pdo, (int) ($params['id'] ?? 0));
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/admin/events');
+    }
+    $back = '/admin/events/' . (int) $event['id'];
+    $sessionId = (int) ($params['sessionId'] ?? 0);
+
+    try {
+        $session = Album::sessionWithEvent($pdo, $sessionId);
+        if ($session === null || (int) ($session['event_id'] ?? 0) !== (int) $event['id']) {
+            Flash::error('Sesi tidak ditemukan pada event ini.');
+            redirect($back);
+        }
+        $media = Album::mediaForSession($pdo, $sessionId);
+        $tokens = [];
+        $tokenFor = static function (int $accountId) use ($pdo, $driveTokenForAccount, &$tokens): string {
+            if (!isset($tokens[$accountId])) {
+                [, $token] = $driveTokenForAccount($pdo, $accountId);
+                $tokens[$accountId] = $token;
+            }
+            return $tokens[$accountId];
+        };
+        $prepared = AlbumZip::prepare($session, $media, $tokenFor);
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+        redirect($back);
+    } catch (PDOException) {
+        Flash::error('Unduhan sesi belum dapat diproses.');
+        redirect($back);
+    }
+
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="album-' . (string) ($session['code'] ?? 'sesi') . '.zip"');
+    header('X-Content-Type-Options: nosniff');
+    AlbumZip::send($prepared);
 });
 
 /**

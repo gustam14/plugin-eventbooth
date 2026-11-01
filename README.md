@@ -1,5 +1,31 @@
 # Plugin Eventbooth — Website
 
+- **Kendali Super Admin atas event + lisensi manual +
+  penugasan Drive disederhanakan (v0.20.0, permintaan
+  pemilik; PERLU migrasi
+  database/migrations/2026-11-01-retention-override.sql):**
+  (1) Formulir event tenant TIDAK lagi menampilkan pilihan
+  akun penyimpanan — Event::pickDriveAccount kini memilih
+  akun terhubung PERTAMA yang dikaitkan Super Admin
+  (sebelumnya sisa kuota paling lega); event lama
+  mempertahankan akunnya di Event::validate. (2) Menu
+  "Event" Super Admin: /admin/events (semua tenant, kolom
+  retensi efektif) + /admin/events/{id} Kelola (status/
+  tanggal, retensi KHUSUS per event lewat
+  events.retention_override_days, pindah akun penyimpanan
+  khusus admin, isi album + hapus berkas/sesi, Unduh ZIP
+  album/sesi). Retensi efektif dirangkum kelas Retention
+  (override → plan); Album::retentionSessions, purge
+  otomasi, Kelola Album tenant, dan daftar event kini
+  memakainya — semua toleran sebelum migrasi (dianggap
+  tanpa override). (3) Panel "Pengaturan Manual Lisensi"
+  di detail tenant Super Admin: POST
+  /admin/tenants/{id}/license-manual menetapkan expires_at
+  persis (atau tanpa kedaluwarsa) + menimpa snapshot plan
+  per tenant (retention_days, max_events, session_quota,
+  drive_quota_gb, max_devices) lewat License::manualAdjust;
+  lisensi dicabut ditolak (hidupkan via Tambah Masa Aktif).
+
 - **Panel Pengaturan Event di Kelola Album (v0.19.0,
   pertanyaan pemilik):** tanggal & status event selama
   ini hanya bisa diubah dari formulir Ubah Event. Kini

@@ -45,7 +45,8 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
             <?php
             $status = (string) ($event['status'] ?? 'draft');
             $lockOn = (int) ($event['payment_lock_enabled'] ?? 1) === 1;
-            $retDays = (int) ($retentionDays ?? 0);
+            $retOverride = $event['retention_override_days'] ?? null;
+            $retDays = $retOverride !== null ? (int) $retOverride : (int) ($retentionDays ?? 0);
             $purgeTs = null;
             $leftDays = null;
             $retColor = 'var(--ink, #EDEFF3)';
@@ -77,7 +78,7 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
                         <span style="color: var(--muted);">Belum ada sesi</span>
                     <?php else: ?>
                         <span style="color: <?= $retColor ?>; font-weight: 600;">Mulai <?= e(License::formatDateId(date('Y-m-d H:i:s', $purgeTs))) ?></span><br>
-                        <span style="color: var(--muted); font-size: 13px;"><?= $leftDays < 0 ? 'sudah jatuh tempo' : 'sisa ' . $leftDays . ' hari' ?></span>
+                        <span style="color: var(--muted); font-size: 13px;"><?= $leftDays < 0 ? 'sudah jatuh tempo' : 'sisa ' . $leftDays . ' hari' ?><?= $retOverride !== null ? ' · retensi khusus' : '' ?></span>
                     <?php endif; ?>
                 </td>
                 <td>

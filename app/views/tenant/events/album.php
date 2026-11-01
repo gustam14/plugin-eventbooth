@@ -148,10 +148,16 @@ foreach (($sessionsData ?? []) as $rowData) {
 
 <?php if (($retentionDays ?? 0) > 0): ?>
 <div class="panel-box">
-    <h3 style="margin-top: 0;">Retensi Album — Plan <?= e((string) ($retentionPlan ?? '')) ?></h3>
+    <h3 style="margin-top: 0;">Retensi Album — <?= ($retentionOverridden ?? false) ? 'Diatur Admin' : 'Plan ' . e((string) ($retentionPlan ?? '')) ?></h3>
     <p class="hint" style="margin: 0;">
-        Sesi pada plan Anda disimpan <strong><?= (int) $retentionDays ?> hari</strong>, lalu dibersihkan
-        otomatis dari galeri dan penyimpanan tanpa pemberitahuan.
+        <?php if (($retentionOverridden ?? false)): ?>
+            Admin mengatur <strong>retensi khusus <?= (int) $retentionDays ?> hari</strong> untuk event ini
+            (mengabaikan retensi plan). Sesi dibersihkan otomatis dari galeri dan penyimpanan
+            tanpa pemberitahuan setelah melewati masa itu.
+        <?php else: ?>
+            Sesi pada plan Anda disimpan <strong><?= (int) $retentionDays ?> hari</strong>, lalu dibersihkan
+            otomatis dari galeri dan penyimpanan tanpa pemberitahuan.
+        <?php endif; ?>
         <?php if ($oldestSessionAt !== null): ?>
             Sesi tertua event ini mulai dibersihkan pada
             <strong><?= e(License::formatDateId(date('Y-m-d H:i:s', strtotime((string) $oldestSessionAt) + (int) $retentionDays * 86400))) ?></strong>.

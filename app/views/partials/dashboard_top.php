@@ -24,6 +24,7 @@ if (($user['role'] ?? '') === 'super_admin') {
         ['key' => 'admin', 'label' => 'Ringkasan', 'href' => '/admin'],
         ['key' => 'plans', 'label' => 'Plan Lisensi', 'href' => '/admin/plans'],
         ['key' => 'tenants', 'label' => 'Tenant & Lisensi', 'href' => '/admin/tenants'],
+        ['key' => 'admin-events', 'label' => 'Event', 'href' => '/admin/events'],
         ['key' => 'drive', 'label' => 'Google Drive', 'href' => '/admin/drive'],
         ['key' => 'payments', 'label' => 'Pembayaran', 'href' => '/admin/payments'],
         ['key' => 'account', 'label' => 'Ganti Kata Sandi', 'href' => '/account/password'],
