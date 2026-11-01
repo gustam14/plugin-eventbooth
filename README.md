@@ -1,5 +1,18 @@
 # Plugin Eventbooth — Website
 
+- **Pembayaran tamu QRIS via Midtrans tenant (v0.11.0):**
+  keputusan pemilik — uang tamu masuk langsung ke Midtrans
+  MASING-MASING tenant. Tenant mengatur kuncinya di menu
+  dashboard baru /tenant/midtrans (Server Key terenkripsi;
+  tabel tenant_midtrans_settings memang sudah ada sejak skema
+  awal — tanpa migrasi). Endpoint perangkat: POST
+  /api/payment/create (tagihan QRIS Core API untuk sesi;
+  satu tagihan menunggu per sesi), GET /api/payment/status
+  (server memeriksa langsung ke Midtrans + verifikasi tanda
+  tangan — jalur utama), POST /api/payment/notification
+  (webhook pelengkap, terverifikasi per tenant). Status lunas
+  hanya dari Midtrans, tidak pernah dari klien.
+
 - **Galeri mandiri + folder Drive per event (v0.10.0):** halaman
   album tidak lagi memuat tautan Google Drive — media disajikan
   lewat rute domain sendiri `/media/{id}` (dan

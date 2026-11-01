@@ -242,6 +242,194 @@ final class Midtrans
         };
     }
 
+    /* -----------------------------------------------------------------
+     * Midtrans MILIK TENANT — pembayaran tamu booth (keputusan
+     * pemilik platform 2026-11-01: uang tamu masuk langsung ke
+     * rekening Midtrans tenant, bukan platform). Kunci tenant
+     * disimpan di tenant_midtrans_settings dari halaman
+     * /tenant/midtrans; Server Key terenkripsi Crypto seperti
+     * kunci platform.
+     * --------------------------------------------------------------- */
+
+    /**
+     * Konfigurasi Midtrans satu tenant; null bila tenant belum
+     * pernah menyimpan pengaturan.
+     *
+     * @return array{environment: string, merchant_id: ?string, client_key: ?string,
+     *               server_key: ?string, enabled: bool, configured: bool}|null
+     */
+    public static function tenantConfig(PDO $pdo, int $tenantId): ?array
+    {
+        $stmt = $pdo->prepare(
+            'SELECT * FROM tenant_midtrans_settings WHERE tenant_id = :tenant LIMIT 1'
+        );
+        $stmt->execute(['tenant' => $tenantId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+
+        $serverKeyEnc = (string) ($row['server_key_encrypted'] ?? '');
+        $serverKey = $serverKeyEnc !== '' ? Crypto::decrypt($serverKeyEnc) : null;
+        $clientKey = trim((string) ($row['client_key'] ?? ''));
+
+        return [
+            'environment' => (string) ($row['environment'] ?? 'sandbox') === 'production'
+                ? 'production'
+                : 'sandbox',
+            'merchant_id' => trim((string) ($row['merchant_id'] ?? '')) ?: null,
+            'client_key' => $clientKey !== '' ? $clientKey : null,
+            'server_key' => $serverKey !== null && $serverKey !== '' ? $serverKey : null,
+            'enabled' => (int) ($row['is_enabled'] ?? 0) === 1,
+            'configured' => $clientKey !== '' && $serverKey !== null && $serverKey !== '',
+        ];
+    }
+
+    /**
+     * Simpan pengaturan Midtrans tenant. Server Key hanya diganti
+     * bila $serverKeyPlain diisi.
+     *
+     * @throws MidtransException Bila enkripsi gagal (APP_KEY kosong).
+     */
+    public static function saveTenantSettings(
+        PDO $pdo,
+        int $tenantId,
+        bool $enabled,
+        string $environment,
+        string $merchantId,
+        string $clientKey,
+        ?string $serverKeyPlain
+    ): void {
+        $serverKeyEnc = null;
+        if ($serverKeyPlain !== null && trim($serverKeyPlain) !== '') {
+            $serverKeyEnc = Crypto::encrypt(trim($serverKeyPlain));
+            if ($serverKeyEnc === null) {
+                throw new MidtransException(
+                    'Server Key tidak dapat dienkripsi — APP_KEY server belum diisi.'
+                );
+            }
+        }
+
+        $stmt = $pdo->prepare(
+            'INSERT INTO tenant_midtrans_settings
+                (tenant_id, is_enabled, environment, merchant_id, client_key, server_key_encrypted)
+             VALUES
+                (:tenant, :enabled, :env, :merchant, :client_key, :server_key)
+             ON DUPLICATE KEY UPDATE
+                is_enabled = VALUES(is_enabled),
+                environment = VALUES(environment),
+                merchant_id = VALUES(merchant_id),
+                client_key = VALUES(client_key),
+                server_key_encrypted = COALESCE(VALUES(server_key_encrypted), server_key_encrypted)'
+        );
+        $stmt->execute([
+            'tenant' => $tenantId,
+            'enabled' => $enabled ? 1 : 0,
+            'env' => $environment === 'production' ? 'production' : 'sandbox',
+            'merchant' => trim($merchantId) !== '' ? trim($merchantId) : null,
+            'client_key' => trim($clientKey) !== '' ? trim($clientKey) : null,
+            'server_key' => $serverKeyEnc,
+        ]);
+    }
+
+    /** URL notifikasi untuk pembayaran TAMU (diisi tenant pada dashboard Midtrans miliknya bila ingin; status juga dicek berkala oleh server). */
+    public static function guestNotifyUrl(): string
+    {
+        return Config::appUrl() . '/api/payment/notification';
+    }
+
+    /** Basis Core API (v2) sesuai environment. */
+    private static function coreBase(string $environment): string
+    {
+        return $environment === 'production'
+            ? 'https://api.midtrans.com'
+            : 'https://api.sandbox.midtrans.com';
+    }
+
+    /**
+     * Buat tagihan QRIS (Core API) pada akun Midtrans tenant.
+     * Respons Midtrans membawa qr_string (isi QR mentah — aplikasi
+     * menggambarnya sendiri) dan/atau URL gambar QR siap pakai.
+     *
+     * @param array{environment: string, server_key: ?string} $config Konfigurasi tenant (tenantConfig).
+     * @return array{qr_string: ?string, qr_url: ?string, transaction_id: ?string, expiry_time: ?string}
+     * @throws MidtransException
+     */
+    public static function chargeQris(array $config, string $orderId, int $amount, string $itemName): array
+    {
+        $serverKey = (string) ($config['server_key'] ?? '');
+        if ($serverKey === '') {
+            throw new MidtransException('Server Key Midtrans tenant belum diatur.');
+        }
+
+        $payload = [
+            'payment_type' => 'qris',
+            'transaction_details' => [
+                'order_id' => $orderId,
+                'gross_amount' => $amount,
+            ],
+            'item_details' => [[
+                'id' => $orderId,
+                'price' => $amount,
+                'quantity' => 1,
+                'name' => mb_substr($itemName, 0, 50),
+            ]],
+            'qris' => ['acquirer' => 'gopay'],
+        ];
+
+        $response = self::httpJson(
+            'POST',
+            self::coreBase((string) $config['environment']) . '/v2/charge',
+            $payload,
+            $serverKey
+        );
+
+        $qrUrl = null;
+        foreach (($response['actions'] ?? []) as $action) {
+            if (($action['name'] ?? '') === 'generate-qr-code' && !empty($action['url'])) {
+                $qrUrl = (string) $action['url'];
+                break;
+            }
+        }
+        $qrString = isset($response['qr_string']) && (string) $response['qr_string'] !== ''
+            ? (string) $response['qr_string']
+            : null;
+        if ($qrString === null && $qrUrl === null) {
+            throw new MidtransException('Midtrans tidak mengembalikan QRIS untuk pesanan ini.');
+        }
+
+        return [
+            'qr_string' => $qrString,
+            'qr_url' => $qrUrl,
+            'transaction_id' => isset($response['transaction_id']) ? (string) $response['transaction_id'] : null,
+            'expiry_time' => isset($response['expiry_time']) ? (string) $response['expiry_time'] : null,
+        ];
+    }
+
+    /**
+     * Baca status transaksi langsung dari Midtrans (jalur utama
+     * pengecekan lunas pembayaran tamu — tidak bergantung pada
+     * URL notifikasi yang diatur tenant di dashboard Midtrans).
+     *
+     * @param array{environment: string, server_key: ?string} $config
+     * @return array<string, mixed> Respons status ter-decode.
+     * @throws MidtransException
+     */
+    public static function fetchStatus(array $config, string $orderId): array
+    {
+        $serverKey = (string) ($config['server_key'] ?? '');
+        if ($serverKey === '') {
+            throw new MidtransException('Server Key Midtrans tenant belum diatur.');
+        }
+
+        return self::httpJson(
+            'GET',
+            self::coreBase((string) $config['environment']) . '/v2/' . rawurlencode($orderId) . '/status',
+            [],
+            $serverKey
+        );
+    }
+
     /**
      * HTTP JSON ke API Midtrans dengan Basic Auth Server Key.
      *
@@ -260,7 +448,9 @@ final class Midtrans
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CUSTOMREQUEST => $method,
-            CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_SLASHES),
+            CURLOPT_POSTFIELDS => $payload === [] && strtoupper($method) === 'GET'
+                ? null
+                : json_encode($payload, JSON_UNESCAPED_SLASHES),
             CURLOPT_HTTPHEADER => array_merge([
                 'Accept: application/json',
                 'Content-Type: application/json',

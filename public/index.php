@@ -2019,6 +2019,82 @@ $router->get('/tenant', static function (): void {
  * aplikasi (currentForTenant) dan memuat daftar perangkat tiap
  * lisensi agar tenant bisa mencabut perangkatnya sendiri.
  */
+/* ---------------------------------------------------------------------
+ * Midtrans Tamu (tenant): akun Midtrans milik tenant sendiri
+ * untuk pembayaran QRIS tamu booth — uang masuk langsung ke
+ * tenant (keputusan 2026-11-01). Hanya Admin Tenant yang boleh
+ * melihat/mengubah kunci pembayaran.
+ * ------------------------------------------------------------------- */
+$router->get('/tenant/midtrans', static function (): void {
+    $user = Auth::requireRole('tenant_admin');
+
+    $midtrans = null;
+    $orders = [];
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $midtrans = Midtrans::tenantConfig($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $midtrans = null;
+        }
+        try {
+            $stmt = $pdo->prepare(
+                "SELECT p.*, s.code AS session_code
+                   FROM payments p
+                   LEFT JOIN sessions s ON s.id = p.session_id
+                  WHERE p.purpose = 'guest' AND p.tenant_id = :tenant
+                  ORDER BY p.id DESC
+                  LIMIT 10"
+            );
+            $stmt->execute(['tenant' => (int) $tenantId]);
+            $orders = $stmt->fetchAll();
+        } catch (PDOException) {
+            $orders = [];
+        }
+    }
+
+    View::render('tenant/midtrans', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'midtrans' => $midtrans,
+        'guestNotifyUrl' => Midtrans::guestNotifyUrl(),
+        'orders' => $orders,
+    ]);
+});
+
+$router->post('/tenant/midtrans', static function (): void {
+    $user = Auth::requireRole('tenant_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Layanan belum siap. Silakan coba lagi.');
+        redirect('/tenant/midtrans');
+    }
+
+    try {
+        Midtrans::saveTenantSettings(
+            $pdo,
+            (int) $tenantId,
+            isset($_POST['is_enabled']),
+            (string) ($_POST['environment'] ?? 'sandbox'),
+            (string) ($_POST['merchant_id'] ?? ''),
+            (string) ($_POST['client_key'] ?? ''),
+            isset($_POST['server_key']) ? (string) $_POST['server_key'] : null
+        );
+        Flash::success('Pengaturan Midtrans tamu tersimpan.');
+    } catch (MidtransException $e) {
+        Flash::error($e->getMessage());
+    } catch (PDOException) {
+        Flash::error('Pengaturan gagal disimpan. Silakan coba lagi.');
+    }
+
+    redirect('/tenant/midtrans');
+});
+
 $router->get('/tenant/licenses', static function (): void {
     $user = Auth::requireRole('tenant_admin', 'tenant_staff');
 
@@ -4097,7 +4173,7 @@ $router->post('/api/drive/complete', static function () use ($readJsonBody, $dri
 });
 
 /* ---------------------------------------------------------------------
- * API — stub grup berikutnya (TODO, belum ada logika bisnis)
+ * API — pembayaran tamu (live sejak v0.11.0) & stub berikutnya
  * ------------------------------------------------------------------- */
 $stub = static function (string $note): callable {
     return static function () use ($note): void {
@@ -4109,11 +4185,290 @@ $stub = static function (string $note): callable {
 // (blueprint §5A). Server Key hanya di server, tidak di aplikasi PC.
 $router->post('/api/plan/checkout', $stub('Checkout lisensi via Midtrans — Milestone 4.'));
 
-// TODO(M4): Pembayaran tamu booth via Midtrans tenant + webhook
-// notifikasi terverifikasi (blueprint §5B & §6).
-$router->post('/api/payment/create', $stub('Buat pembayaran tamu — Milestone 4.'));
-$router->post('/api/payment/notification', $stub('Webhook notifikasi Midtrans — Milestone 4.'));
-$router->get('/api/payment/status', $stub('Polling status pembayaran — Milestone 4.'));
+/* ---------------------------------------------------------------------
+ * Pembayaran tamu booth (QRIS) — Midtrans MILIK TENANT (keputusan
+ * 2026-11-01: uang langsung ke tenant). Aplikasi membuat tagihan
+ * QRIS untuk sesi (Core API akun tenant), tamu memindai dan
+ * membayar dari ponselnya, aplikasi menanyakan status ke server
+ * dan server memeriksa langsung ke Midtrans (jalur utama —
+ * webhook bersifat pelengkap bagi tenant yang mengisi URL
+ * notifikasinya). Status lunas HANYA dari respons Midtrans yang
+ * tanda tangannya terverifikasi dengan Server Key tenant.
+ * ------------------------------------------------------------------- */
+
+/** Cari pembayaran tamu dari order_id (+ tenant bila diberikan). */
+$guestPaymentFind = static function (PDO $pdo, string $orderId, ?int $tenantId): ?array {
+    $sql = "SELECT * FROM payments WHERE purpose = 'guest' AND order_id = :order_id";
+    $params = ['order_id' => $orderId];
+    if ($tenantId !== null) {
+        $sql .= ' AND tenant_id = :tenant';
+        $params['tenant'] = $tenantId;
+    }
+    $stmt = $pdo->prepare($sql . ' LIMIT 1');
+    $stmt->execute($params);
+    $row = $stmt->fetch();
+
+    return $row === false ? null : $row;
+};
+
+/**
+ * Terapkan payload status/notifikasi Midtrans ke baris payments:
+ * petakan status, catat paid_at saat pertama lunas, simpan
+ * payload mentah untuk audit. Mengembalikan baris terbaru.
+ */
+$guestPaymentApply = static function (PDO $pdo, array $payment, array $payload): array {
+    $newStatus = Midtrans::statusFromNotification($payload);
+    $paidAt = $payment['paid_at'] ?? null;
+    if ($newStatus === 'paid' && ($paidAt === null || $paidAt === '')) {
+        $paidAt = date('Y-m-d H:i:s');
+    }
+    $expiredAt = $payment['expired_at'] ?? null;
+    if ($newStatus === 'expired' && ($expiredAt === null || $expiredAt === '')) {
+        $expiredAt = date('Y-m-d H:i:s');
+    }
+    $stmt = $pdo->prepare(
+        'UPDATE payments
+            SET status = :status,
+                status_code = :status_code,
+                transaction_id = COALESCE(:transaction_id, transaction_id),
+                payment_type = COALESCE(:payment_type, payment_type),
+                raw_webhook = :raw,
+                paid_at = :paid_at,
+                expired_at = :expired_at
+          WHERE id = :id'
+    );
+    $stmt->execute([
+        'status' => $newStatus,
+        'status_code' => isset($payload['status_code']) ? (string) $payload['status_code'] : ($payment['status_code'] ?? null),
+        'transaction_id' => isset($payload['transaction_id']) && (string) $payload['transaction_id'] !== ''
+            ? (string) $payload['transaction_id'] : null,
+        'payment_type' => isset($payload['payment_type']) && (string) $payload['payment_type'] !== ''
+            ? (string) $payload['payment_type'] : null,
+        'raw' => json_encode($payload, JSON_UNESCAPED_SLASHES),
+        'paid_at' => $paidAt,
+        'expired_at' => $expiredAt,
+        'id' => (int) $payment['id'],
+    ]);
+    $payment['status'] = $newStatus;
+    $payment['paid_at'] = $paidAt;
+
+    return $payment;
+};
+
+/** Bentuk ringkas pembayaran tamu untuk aplikasi. */
+$guestPaymentView = static function (array $payment, array $extra = []): array {
+    return array_merge([
+        'order_id' => (string) $payment['order_id'],
+        'amount' => (int) round((float) $payment['gross_amount']),
+        'state' => (string) $payment['status'],
+        'paid' => (string) $payment['status'] === 'paid',
+    ], $extra);
+};
+
+$router->post('/api/payment/create', static function () use ($appDeviceContext, $readJsonBody, $guestPaymentFind, $guestPaymentView): void {
+    [$pdo, $device, $license, $tenant] = $appDeviceContext();
+    $tenantId = (int) $tenant['id'];
+    $body = $readJsonBody();
+
+    $sessionId = isset($body['session_id']) && is_numeric($body['session_id']) ? (int) $body['session_id'] : 0;
+    if ($sessionId <= 0) {
+        Json::error('session_id wajib diisi.', 422, 'invalid_request');
+    }
+
+    try {
+        $session = Album::sessionWithEvent($pdo, $sessionId);
+        if ($session === null || (int) $session['event_tenant_id'] !== $tenantId) {
+            Json::error('Sesi tidak ditemukan.', 404, 'not_found');
+        }
+        $event = Event::findForTenant($pdo, $tenantId, (int) $session['event_id']);
+        if ($event === null) {
+            Json::error('Event tidak ditemukan.', 404, 'not_found');
+        }
+        if ((int) ($event['payment_lock_enabled'] ?? 0) !== 1) {
+            Json::error('Event ini tidak memakai pembayaran tamu.', 422, 'payment_not_required');
+        }
+        $package = null;
+        if (!empty($session['package_id'])) {
+            $package = Package::find($pdo, (int) $session['package_id']);
+        }
+        $amount = $package !== null ? (int) round((float) ($package['price'] ?? 0)) : 0;
+        if ($amount <= 0) {
+            Json::error('Paket sesi ini tidak memiliki harga yang dapat ditagih.', 422, 'no_billable_package');
+        }
+
+        // Satu tagihan menunggu per sesi: pembuatan ganda (ketuk
+        // dua kali) mengembalikan tagihan yang sama.
+        $stmt = $pdo->prepare(
+            "SELECT * FROM payments
+              WHERE purpose = 'guest' AND session_id = :session AND status = 'pending'
+              ORDER BY id DESC LIMIT 1"
+        );
+        $stmt->execute(['session' => $sessionId]);
+        $existing = $stmt->fetch();
+        if ($existing !== false) {
+            Json::respond([
+                'status' => 'ok',
+                'payment' => $guestPaymentView($existing, ['existing' => true]),
+            ]);
+            return;
+        }
+
+        $cfg = Midtrans::tenantConfig($pdo, $tenantId);
+    } catch (PDOException) {
+        Json::error('Layanan belum siap. Silakan coba lagi.', 503, 'server_error');
+        return;
+    }
+    if ($cfg === null || !$cfg['enabled'] || !$cfg['configured']) {
+        Json::error(
+            'Pembayaran tamu belum aktif. Tenant perlu mengisi kunci Midtrans miliknya di dashboard (menu Midtrans Tamu).',
+            503,
+            'tenant_midtrans_not_configured'
+        );
+    }
+
+    $orderId = 'EBG-' . (string) $session['code'] . '-' . strtoupper(bin2hex(random_bytes(3)));
+    try {
+        $stmt = $pdo->prepare(
+            "INSERT INTO payments
+                (purpose, tenant_id, event_id, session_id, order_id, gross_amount, status, payment_type)
+             VALUES
+                ('guest', :tenant, :event, :session, :order_id, :amount, 'pending', 'qris')"
+        );
+        $stmt->execute([
+            'tenant' => $tenantId,
+            'event' => (int) $session['event_id'],
+            'session' => $sessionId,
+            'order_id' => $orderId,
+            'amount' => $amount,
+        ]);
+        $paymentId = (int) $pdo->lastInsertId();
+
+        $charge = Midtrans::chargeQris(
+            $cfg,
+            $orderId,
+            $amount,
+            'Photobooth ' . (string) ($package['name'] ?? 'Sesi Foto')
+        );
+        if ($charge['transaction_id'] !== null) {
+            $upd = $pdo->prepare('UPDATE payments SET transaction_id = :tid WHERE id = :id');
+            $upd->execute(['tid' => $charge['transaction_id'], 'id' => $paymentId]);
+        }
+    } catch (MidtransException $e) {
+        try {
+            $fail = $pdo->prepare(
+                "UPDATE payments SET status = 'failed', raw_webhook = :raw
+                  WHERE order_id = :order_id AND purpose = 'guest'"
+            );
+            $fail->execute([
+                'raw' => json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_SLASHES),
+                'order_id' => $orderId,
+            ]);
+        } catch (PDOException) {
+            // Penandaan gagal bersifat tambahan.
+        }
+        Json::error('Gerbang pembayaran menolak permintaan: ' . $e->getMessage(), 502, 'gateway_error');
+        return;
+    } catch (PDOException) {
+        Json::error('Pembayaran gagal dibuat. Silakan coba lagi.', 503, 'server_error');
+        return;
+    }
+
+    Json::respond([
+        'status' => 'ok',
+        'payment' => [
+            'order_id' => $orderId,
+            'amount' => $amount,
+            'state' => 'pending',
+            'paid' => false,
+            'qr_string' => $charge['qr_string'],
+            'qr_url' => $charge['qr_url'],
+            'expiry_time' => $charge['expiry_time'],
+        ],
+    ]);
+});
+
+$router->get('/api/payment/status', static function () use ($appDeviceContext, $guestPaymentFind, $guestPaymentApply, $guestPaymentView): void {
+    [$pdo, $device, $license, $tenant] = $appDeviceContext();
+    $tenantId = (int) $tenant['id'];
+
+    $orderId = isset($_GET['order_id']) ? trim((string) $_GET['order_id']) : '';
+    if ($orderId === '') {
+        Json::error('order_id wajib diisi.', 422, 'invalid_request');
+    }
+
+    try {
+        $payment = $guestPaymentFind($pdo, $orderId, $tenantId);
+    } catch (PDOException) {
+        Json::error('Layanan belum siap. Silakan coba lagi.', 503, 'server_error');
+        return;
+    }
+    if ($payment === null) {
+        Json::error('Pembayaran tidak ditemukan.', 404, 'not_found');
+    }
+
+    $terminal = ['paid', 'denied', 'expired', 'cancelled', 'failed', 'refunded'];
+    if (in_array((string) $payment['status'], $terminal, true)) {
+        Json::respond(['status' => 'ok', 'payment' => $guestPaymentView($payment)]);
+        return;
+    }
+
+    $gatewayFailed = false;
+    try {
+        $cfg = Midtrans::tenantConfig($pdo, $tenantId);
+        if ($cfg !== null && $cfg['configured']) {
+            $statusPayload = Midtrans::fetchStatus($cfg, $orderId);
+            $signatureOk = !isset($statusPayload['signature_key'])
+                || Midtrans::verifySignature($statusPayload, (string) $cfg['server_key']);
+            if ($signatureOk) {
+                $payment = $guestPaymentApply($pdo, $payment, $statusPayload);
+            } else {
+                $gatewayFailed = true;
+            }
+        }
+    } catch (MidtransException | PDOException) {
+        // Status terakhir yang tercatat tetap dilaporkan; aplikasi
+        // akan menanyakan lagi pada putaran berikutnya.
+        $gatewayFailed = true;
+    }
+
+    Json::respond([
+        'status' => 'ok',
+        'payment' => $guestPaymentView($payment, ['gateway_check_failed' => $gatewayFailed]),
+    ]);
+});
+
+$router->post('/api/payment/notification', static function () use ($readJsonBody, $guestPaymentFind, $guestPaymentApply): void {
+    $payload = $readJsonBody();
+    $orderId = isset($payload['order_id']) ? trim((string) $payload['order_id']) : '';
+    if ($orderId === '') {
+        Json::error('Payload notifikasi tidak lengkap.', 400, 'invalid_payload');
+    }
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Json::error('Layanan belum siap.', 503, 'server_error');
+    }
+
+    try {
+        $payment = $guestPaymentFind($pdo, $orderId, null);
+        if ($payment === null) {
+            Json::error('Pembayaran tidak ditemukan.', 404, 'not_found');
+        }
+        $cfg = Midtrans::tenantConfig($pdo, (int) $payment['tenant_id']);
+        if ($cfg === null || ($cfg['server_key'] ?? null) === null) {
+            Json::error('Konfigurasi tenant tidak ditemukan.', 503, 'payment_not_configured');
+        }
+        if (!Midtrans::verifySignature($payload, (string) $cfg['server_key'])) {
+            Json::error('Tanda tangan notifikasi tidak sah.', 403, 'invalid_signature');
+        }
+        $guestPaymentApply($pdo, $payment, $payload);
+    } catch (PDOException) {
+        Json::error('Notifikasi gagal diproses.', 503, 'server_error');
+        return;
+    }
+
+    Json::respond(['status' => 'ok']);
+});
 
 // CATATAN(M5b): Endpoint operasi Drive (/api/drive/session-folders,
 // /api/drive/init-upload, /api/drive/complete) SUDAH HIDUP di bagian

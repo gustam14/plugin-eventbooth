@@ -36,6 +36,7 @@ if (($user['role'] ?? '') === 'super_admin') {
         ['key' => 'devices', 'label' => 'Perangkat', 'href' => '/tenant/devices'],
         ['key' => 'events', 'label' => 'Event', 'href' => '/tenant/events'],
         ['key' => 'packages', 'label' => 'Paket Sesi', 'href' => '/tenant/packages'],
+        ['key' => 'midtrans', 'label' => 'Midtrans Tamu', 'href' => '/tenant/midtrans'],
         ['key' => 'account', 'label' => 'Ganti Kata Sandi', 'href' => '/account/password'],
     ];
     $navSoon = ['Statistik'];
