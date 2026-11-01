@@ -386,6 +386,25 @@ final class License
         ];
     }
 
+    /**
+     * Retensi album tenant (hari) dari lisensi tunggalnya,
+     * beserta nama plannya — dasar pembersihan album otomatis
+     * (v0.16.0). 0 berarti album TIDAK pernah dibersihkan
+     * otomatis; tenant tanpa lisensi juga 0 (aman).
+     *
+     * @return array{days: int, plan_name: string}
+     */
+    public static function retentionOf(PDO $pdo, int $tenantId): array
+    {
+        $license = self::liveForTenant($pdo, $tenantId);
+        if ($license === null) {
+            return ['days' => 0, 'plan_name' => '—'];
+        }
+        $ent = self::entitlements($license);
+
+        return ['days' => $ent['retention_days'], 'plan_name' => $ent['plan_name']];
+    }
+
     /** Susun snapshot dari baris plan (dipakai saat penerbitan). */
     public static function snapshotFromPlan(array $plan): array
     {

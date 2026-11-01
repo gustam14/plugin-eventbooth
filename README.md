@@ -1,5 +1,22 @@
 # Plugin Eventbooth — Website
 
+- **Retensi album otomatis (v0.16.0, pilihan pemilik):**
+  sesi yang umurnya mencapai retensi plan tenant (snapshot
+  lisensi; 0 = tidak pernah) dibersihkan otomatis — berkas
+  Drive terhapus + baris media/sesi dibuang. Mesinnya:
+  License::retentionOf + Album::retentionSessions (mode
+  'past' & 'upcoming' berjendela tepat satu hari untuk
+  peringatan H-3), endpoint otomasi bertoken
+  GET /api/automation/retention-candidates?mode=… dan
+  POST /api/automation/purge-session (server memeriksa
+  ulang umur sebelum menghapus; idempoten; respons membawa
+  teks WhatsApp siap kirim — peringatan H-3 dari kandidat
+  upcoming, pemberitahuan pasca-hapus dari purge). Ringkasan
+  Super Admin menampilkan hitungan sesi jatuh tempo &
+  peringatan. Workflow n8n hariannya meniru pola pengingat
+  lisensi (ambil kandidat → loop → purge/peringatan →
+  jeda acak).
+
 - **Penyegaran tampilan (v0.15.0, keputusan pemilik: tetap
   PHP ringan, tanpa migrasi Laravel):** sistem desain
   dashboard disegarkan di tempat (nama kelas sama, nol

@@ -452,4 +452,72 @@ final class Album
 
         return $row === false ? [] : $row;
     }
+
+    /**
+     * Sesi-sesi yang menyentuh retensi album tenantnya (v0.16.0).
+     * Mode 'past': umur sesi (dari created_at) sudah mencapai
+     * retensi plan tenant — siap dibersihkan. Mode 'upcoming':
+     * umur berada di jendela tepat satu hari [retensi-3,
+     * retensi-2) sehingga workflow harian mengirim peringatan
+     * H-3 tepat satu kali. Tenant beretensi 0 (atau tanpa
+     * lisensi) selalu dilewati — albumnya tidak pernah disentuh.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function retentionSessions(PDO $pdo, string $mode, int $limit = 100): array
+    {
+        $stmt = $pdo->query(
+            'SELECT s.id AS session_id, s.code AS session_code, s.created_at,
+                    e.id AS event_id, e.name AS event_name, e.tenant_id AS tenant_id
+               FROM sessions s
+               JOIN events e ON e.id = s.event_id
+              ORDER BY s.created_at ASC'
+        );
+
+        $out = [];
+        $cache = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $tenantId = (int) $row['tenant_id'];
+            if (!array_key_exists($tenantId, $cache)) {
+                $cache[$tenantId] = License::retentionOf($pdo, $tenantId);
+            }
+            $ret = (int) $cache[$tenantId]['days'];
+            if ($ret <= 0) {
+                continue;
+            }
+            $age = (int) floor((time() - strtotime((string) $row['created_at'])) / 86400);
+            $hit = $mode === 'upcoming'
+                ? ($age >= $ret - 3 && $age < $ret - 2)
+                : ($age >= $ret);
+            if (!$hit) {
+                continue;
+            }
+
+            $count = $pdo->prepare(
+                'SELECT COUNT(*) AS c, COALESCE(SUM(size_bytes), 0) AS b
+                   FROM media_files WHERE session_id = :id'
+            );
+            $count->execute(['id' => (int) $row['session_id']]);
+            $agg = $count->fetch() ?: ['c' => 0, 'b' => 0];
+
+            $out[] = [
+                'session_id' => (int) $row['session_id'],
+                'session_code' => (string) $row['session_code'],
+                'created_at' => (string) $row['created_at'],
+                'event_id' => (int) $row['event_id'],
+                'event_name' => (string) $row['event_name'],
+                'tenant_id' => $tenantId,
+                'retention_days' => $ret,
+                'plan_name' => (string) $cache[$tenantId]['plan_name'],
+                'age_days' => $age,
+                'media_count' => (int) $agg['c'],
+                'total_bytes' => (int) $agg['b'],
+            ];
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
+    }
 }

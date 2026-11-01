@@ -8,6 +8,8 @@
  * @var bool $dbReady False bila database belum disetel / tabel belum ada.
  * @var array{tenants: int, licenses: int, plans: int, events: int} $counts
  * @var array<int, array<string, mixed>> $expiring Lisensi aktif yang berakhir <= 30 hari (M4).
+ * @var int $retentionDue Sesi melewati retensi plan (v0.16.0).
+ * @var int $retentionUpcoming Sesi di jendela peringatan H-3 retensi (v0.16.0).
  */
 
 $title = 'Ringkasan Super Admin';
@@ -130,6 +132,22 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
         </tbody>
     </table>
     </div>
+</div>
+<?php endif; ?>
+
+<?php if (($retentionDue ?? 0) > 0 || ($retentionUpcoming ?? 0) > 0): ?>
+<div class="panel-box" style="margin-top: 22px;">
+    <h2 style="font-size: 16.5px; font-weight: 700; margin-bottom: 6px;">Retensi Album Otomatis</h2>
+    <p style="font-size: 14.5px; margin-bottom: 6px;">
+        <strong><?= (int) ($retentionDue ?? 0) ?> sesi</strong> telah melewati masa retensi plan tenantnya
+        dan akan dibersihkan oleh workflow harian (berkas di penyimpanan ikut terhapus, tenant menerima
+        pemberitahuan WhatsApp). <strong><?= (int) ($retentionUpcoming ?? 0) ?> sesi</strong> memasuki masa
+        peringatan 3 hari sebelum penghapusan.
+    </p>
+    <p class="hint">
+        Retensi mengikuti plan tiap tenant (0 hari = tidak pernah dibersihkan). Pembersihan hanya berjalan
+        bila workflow retensi di n8n aktif.
+    </p>
 </div>
 <?php endif; ?>
 <?php require BASE_PATH . '/app/views/partials/dashboard_bottom.php'; ?>

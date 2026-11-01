@@ -501,6 +501,17 @@ $router->get('/admin', static function (): void {
         } catch (PDOException) {
             $expiring = [];
         }
+
+        // Panel retensi album (v0.16.0): hitungan sesi yang sudah
+        // melewati retensi plan tenantnya + yang memasuki masa
+        // peringatan H-3. Gagal diam-diam seperti kartu di atas.
+        try {
+            $retentionDue = count(Album::retentionSessions($pdo, 'past', 500));
+            $retentionUpcoming = count(Album::retentionSessions($pdo, 'upcoming', 500));
+        } catch (PDOException) {
+            $retentionDue = 0;
+            $retentionUpcoming = 0;
+        }
     }
 
     View::render('admin/overview', [
@@ -510,6 +521,8 @@ $router->get('/admin', static function (): void {
         'dbReady' => $dbReady,
         'counts' => $counts,
         'expiring' => $expiring,
+        'retentionDue' => $retentionDue ?? 0,
+        'retentionUpcoming' => $retentionUpcoming ?? 0,
     ]);
 });
 
@@ -3317,6 +3330,189 @@ $router->post('/api/automation/mark-notified', static function () use ($automati
     }
 
     Json::respond(['ok' => true]);
+});
+
+/**
+ * Retensi album otomatis (v0.16.0, pilihan pemilik): daftar sesi
+ * yang menyentuh retensi plan tenantnya untuk workflow n8n.
+ * ?mode=past (bawaan) = siap dibersihkan; ?mode=upcoming =
+ * jendela peringatan H-3 (tepat satu hari) lengkap dengan teks
+ * pesan WhatsApp siap kirim, meniru pola expiring-licenses.
+ */
+$router->get('/api/automation/retention-candidates', static function () use ($automationGuard): void {
+    $pdo = $automationGuard();
+    $mode = isset($_GET['mode']) && $_GET['mode'] === 'upcoming' ? 'upcoming' : 'past';
+
+    try {
+        $items = [];
+        foreach (Album::retentionSessions($pdo, $mode) as $row) {
+            $tenant = Tenant::find($pdo, (int) $row['tenant_id']);
+            $vendor = $tenant !== null ? Tenant::displayName($tenant) : '';
+            $whatsapp = $tenant !== null
+                ? (Whatsapp::normalize($tenant['whatsapp'] ?? null)
+                    ?? Whatsapp::normalize($tenant['phone'] ?? null))
+                : null;
+            $item = $row + [
+                'vendor_name' => $vendor,
+                'whatsapp' => $whatsapp,
+            ];
+            if ($mode === 'upcoming') {
+                $deleteDate = License::formatDateId(
+                    date('Y-m-d H:i:s', strtotime((string) $row['created_at']) + $row['retention_days'] * 86400)
+                );
+                $item['message'] = 'Halo *' . $vendor . "*,\n\n"
+                    . 'Kami dari *EventBooth* mengingatkan bahwa sesuai masa retensi album plan *'
+                    . $row['plan_name'] . '* Anda (' . $row['retention_days'] . ' hari), sesi *'
+                    . $row['session_code'] . '* pada event *' . $row['event_name']
+                    . '* akan dihapus otomatis dari galeri dan penyimpanan sekitar tanggal *'
+                    . $deleteDate . "*.\n\n"
+                    . "Bila album ini masih dibutuhkan, silakan unduh berkasnya dari galeri sebelum tanggal tersebut, atau tingkatkan plan Anda untuk masa simpan yang lebih lama.\n\n"
+                    . "Terima kasih telah mempercayakan booth Anda kepada EventBooth.\n\n"
+                    . "Salam,\n*Tim EventBooth*";
+            }
+            $items[] = $item;
+        }
+    } catch (PDOException) {
+        Json::error('Data retensi belum dapat dibaca.', 503, 'server_not_configured');
+    }
+
+    $sender = null;
+    try {
+        $sender = Whatsapp::normalize(Settings::get($pdo, 'mpwa_sender'));
+    } catch (PDOException) {
+        $sender = null;
+    }
+
+    Json::respond([
+        'items' => $items,
+        'mode' => $mode,
+        'sender' => $sender,
+        'generated_at' => date('c'),
+    ]);
+});
+
+/**
+ * Bersihkan SATU sesi yang sudah melewati retensi (v0.16.0):
+ * server memeriksa ulang umur sesi terhadap retensi plan
+ * tenant SAAT ITU (daftar kandidat bisa basi), membuang semua
+ * berkasnya dari Drive lalu baris media + sesinya. Idempoten:
+ * sesi yang sudah hilang menjawab purged:false. Respons
+ * membawa teks pemberitahuan WhatsApp siap kirim untuk
+ * workflow.
+ */
+$router->post('/api/automation/purge-session', static function () use ($automationGuard, $readJsonBody, $googleCredentials): void {
+    $pdo = $automationGuard();
+    $body = $readJsonBody();
+    $sessionId = isset($body['session_id']) ? (int) $body['session_id'] : 0;
+    if ($sessionId <= 0) {
+        Json::error('session_id wajib diisi.', 422, 'invalid_request');
+    }
+
+    try {
+        $session = Album::sessionWithEvent($pdo, $sessionId);
+    } catch (PDOException) {
+        Json::error('Data sesi belum dapat dibaca.', 503, 'server_not_configured');
+    }
+    if ($session === null) {
+        Json::respond(['status' => 'ok', 'purged' => false, 'reason' => 'already_gone']);
+    }
+
+    $tenantId = (int) ($session['event_tenant_id'] ?? 0);
+    $retention = License::retentionOf($pdo, $tenantId);
+    $retDays = (int) $retention['days'];
+    if ($retDays <= 0) {
+        Json::respond(['status' => 'ok', 'purged' => false, 'reason' => 'no_retention']);
+    }
+    $ageDays = (int) floor((time() - strtotime((string) ($session['created_at'] ?? ''))) / 86400);
+    if ($ageDays < $retDays) {
+        Json::respond([
+            'status' => 'ok', 'purged' => false, 'reason' => 'not_expired',
+            'age_days' => $ageDays, 'retention_days' => $retDays,
+        ]);
+    }
+
+    // Token Drive per akun, disiapkan sekali per akun dalam
+    // permintaan ini (berkas satu sesi nyaris selalu satu akun).
+    $tokens = [];
+    $tokenFor = static function (int $accountId) use ($pdo, $googleCredentials, &$tokens): string {
+        if (isset($tokens[$accountId])) {
+            return $tokens[$accountId];
+        }
+        if ($accountId <= 0) {
+            throw new RuntimeException('Sesi ini tidak memiliki akun penyimpanan.');
+        }
+        $account = GoogleAccount::find($pdo, $accountId);
+        if ($account === null || (string) ($account['status'] ?? '') !== 'connected') {
+            throw new RuntimeException('Akun penyimpanan sedang tidak terhubung.');
+        }
+        $creds = $googleCredentials($pdo);
+        $clientSecret = $creds['secret_cipher'] !== null ? Crypto::decrypt($creds['secret_cipher']) : null;
+        $refreshToken = Crypto::decrypt((string) ($account['refresh_token_encrypted'] ?? ''));
+        if ($creds['client_id'] === '' || $clientSecret === null || $clientSecret === ''
+            || $refreshToken === null || $refreshToken === '') {
+            throw new RuntimeException('Kredensial Google Drive belum lengkap di server.');
+        }
+        $tokens[$accountId] = GoogleDrive::accessTokenOrFail($creds['client_id'], $clientSecret, $refreshToken);
+
+        return $tokens[$accountId];
+    };
+
+    $files = 0;
+    $bytes = 0;
+    try {
+        foreach (Album::mediaForSession($pdo, $sessionId) as $media) {
+            $accountId = (int) ($media['drive_account_id'] ?? 0);
+            if ($accountId <= 0) {
+                $accountId = (int) ($session['event_drive_account_id'] ?? 0);
+            }
+            GoogleDrive::deleteFileOrFail($tokenFor($accountId), (string) ($media['drive_file_id'] ?? ''));
+            $del = $pdo->prepare('DELETE FROM media_files WHERE id = :id');
+            $del->execute(['id' => (int) $media['id']]);
+            $files++;
+            $bytes += (int) ($media['size_bytes'] ?? 0);
+        }
+        $pdo->prepare('DELETE FROM sessions WHERE id = :id')->execute(['id' => $sessionId]);
+    } catch (GoogleDriveException $e) {
+        Json::error('Pembersihan sesi terputus di tengah jalan: ' . $e->getMessage(), 502, 'drive_error');
+    } catch (RuntimeException $e) {
+        Json::error($e->getMessage(), 503, 'drive_not_configured');
+    } catch (PDOException) {
+        Json::error('Pembersihan sesi gagal dicatat.', 503, 'server_not_configured');
+    }
+
+    $tenant = null;
+    try {
+        $tenant = Tenant::find($pdo, $tenantId);
+    } catch (PDOException) {
+        $tenant = null;
+    }
+    $vendor = $tenant !== null ? Tenant::displayName($tenant) : '';
+    $whatsapp = $tenant !== null
+        ? (Whatsapp::normalize($tenant['whatsapp'] ?? null)
+            ?? Whatsapp::normalize($tenant['phone'] ?? null))
+        : null;
+    $message = 'Halo *' . $vendor . "*,\n\n"
+        . 'Sesuai masa retensi album plan *' . $retention['plan_name'] . '* Anda (' . $retDays . ' hari), sesi *'
+        . (string) ($session['code'] ?? '') . '* pada event *' . (string) ($session['event_name'] ?? '')
+        . '* telah dihapus otomatis dari galeri dan penyimpanan hari ini. Total ' . $files
+        . " berkas telah dibersihkan.\n\n"
+        . "Sesi yang lebih baru tidak terpengaruh. Untuk masa simpan yang lebih lama, Anda dapat meningkatkan plan melalui dashboard.\n\n"
+        . "Salam,\n*Tim EventBooth*";
+
+    Json::respond([
+        'status' => 'ok',
+        'purged' => true,
+        'session_id' => $sessionId,
+        'session_code' => (string) ($session['code'] ?? ''),
+        'event_name' => (string) ($session['event_name'] ?? ''),
+        'files_deleted' => $files,
+        'bytes_freed' => $bytes,
+        'vendor_name' => $vendor,
+        'whatsapp' => $whatsapp,
+        'plan_name' => $retention['plan_name'],
+        'retention_days' => $retDays,
+        'message' => $message,
+    ]);
 });
 
 /* ---------------------------------------------------------------------
