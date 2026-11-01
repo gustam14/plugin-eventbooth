@@ -4630,6 +4630,63 @@ $router->get('/tenant/events/{id}/album/download', static function (array $param
     AlbumZip::send($prepared);
 });
 
+/**
+ * Simpan Pengaturan Event dari Kelola Album (v0.19.0):
+ * HANYA status + tanggal mulai/selesai event — kolom lain
+ * (nama, akun Drive, kunci pembayaran) tidak disentuh.
+ * Validasi meniru Event::sanitize.
+ */
+$router->post('/tenant/events/{id}/album/event-settings', static function (array $params) use ($tenantAlbumEvent): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    $albumPath = '/tenant/events/' . (int) $event['id'] . '/album';
+
+    $status = (string) ($_POST['status'] ?? '');
+    if (!in_array($status, Event::STATUSES, true)) {
+        Flash::error('Status event tidak sah.');
+        redirect($albumPath);
+    }
+    $parse = static function (string $raw): ?string {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return null;
+        }
+        $ts = strtotime(str_replace('T', ' ', $raw));
+
+        return $ts === false ? null : date('Y-m-d H:i:s', $ts);
+    };
+    $startsRaw = (string) ($_POST['starts_at'] ?? '');
+    $endsRaw = (string) ($_POST['ends_at'] ?? '');
+    $startsAt = $parse($startsRaw);
+    $endsAt = $parse($endsRaw);
+    if (($startsRaw !== '' && $startsAt === null) || ($endsRaw !== '' && $endsAt === null)) {
+        Flash::error('Format tanggal tidak sah.');
+        redirect($albumPath);
+    }
+    if ($startsAt !== null && $endsAt !== null && strtotime($endsAt) < strtotime($startsAt)) {
+        Flash::error('Tanggal selesai tidak boleh sebelum tanggal mulai.');
+        redirect($albumPath);
+    }
+
+    try {
+        Event::updateScheduleStatus($pdo, (int) $event['id'], $startsAt, $endsAt, $status);
+        Flash::success('Pengaturan event diperbarui.');
+    } catch (PDOException) {
+        Flash::error('Pengaturan event gagal disimpan.');
+    }
+    redirect($albumPath);
+});
+
 $router->post('/tenant/events/{id}/album/media/{mediaId}/delete', static function (array $params) use ($tenantAlbumEvent, $deleteOneMedia): void {
     $user = Auth::requireRole('tenant_admin', 'tenant_staff');
     Auth::requireCsrf();

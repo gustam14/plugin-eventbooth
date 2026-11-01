@@ -1,5 +1,21 @@
 # Plugin Eventbooth — Website
 
+- **Panel Pengaturan Event di Kelola Album (v0.19.0,
+  pertanyaan pemilik):** tanggal & status event selama
+  ini hanya bisa diubah dari formulir Ubah Event. Kini
+  Kelola Album punya panel "Pengaturan Event": status
+  (Draf/Aktif/Selesai/Diarsipkan) + tanggal mulai/selesai,
+  disimpan lewat POST …/album/event-settings yang
+  memperbarui HANYA ketiga kolom itu
+  (Event::updateScheduleStatus; validasi meniru
+  Event::sanitize). Fungsi sebenarnya yang dijelaskan ke
+  pemilik: status menggerbangi daftar event aplikasi
+  booth (Event::forApi hanya draft+active; selesai/
+  arsip hilang dari aplikasi, galeri publik tetap
+  terlihat); tanggal murni keterangan (tampil di daftar
+  Event & sebagai event_date di aplikasi, tidak
+  mengunci sesi).
+
 - **Unduh ZIP album penuh + tanggal retensi per event
   (v0.18.0, koreksi pemilik):** GET
   /tenant/events/{id}/album/download menyusun ZIP SELURUH

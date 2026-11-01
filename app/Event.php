@@ -416,6 +416,26 @@ final class Event
      * Tampilan
      * --------------------------------------------------------------- */
 
+    /**
+     * Perbarui HANYA status + tanggal event (v0.19.0) —
+     * dipakai panel Pengaturan Event di Kelola Album agar
+     * tenant tak perlu membuka formulir Ubah Event penuh.
+     */
+    public static function updateScheduleStatus(PDO $pdo, int $eventId, ?string $startsAt, ?string $endsAt, string $status): void
+    {
+        $stmt = $pdo->prepare(
+            'UPDATE events
+                SET starts_at = :starts_at, ends_at = :ends_at, status = :status
+              WHERE id = :id'
+        );
+        $stmt->execute([
+            'starts_at' => $startsAt,
+            'ends_at' => $endsAt,
+            'status' => $status,
+            'id' => $eventId,
+        ]);
+    }
+
     /** Label Indonesia untuk status event. */
     public static function statusLabel(string $status): string
     {

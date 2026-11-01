@@ -69,6 +69,42 @@ foreach (($sessionsData ?? []) as $rowData) {
 </p>
 
 <div class="panel-box">
+    <h3 style="margin-top: 0;">Pengaturan Event</h3>
+    <p class="hint" style="margin-bottom: 12px;">
+        <strong>Status</strong> menentukan kemunculan event di aplikasi booth: Draf &amp; Aktif tampil;
+        Selesai &amp; Diarsipkan hilang dari aplikasi (sesi baru tidak bisa dimulai), tetapi galeri
+        publik tetap dapat dilihat. <strong>Tanggal</strong> bersifat keterangan — tampil di daftar
+        Event dan di aplikasi booth, tidak mengunci sesi.
+    </p>
+    <form method="post" action="/tenant/events/<?= $eventId ?>/album/event-settings">
+        <?= Auth::csrfField() ?>
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: end;">
+            <label style="display: block;">
+                <span class="hint" style="display: block; margin-bottom: 4px;">Status</span>
+                <select name="status">
+                    <?php foreach (Event::STATUSES as $st): ?>
+                        <option value="<?= e($st) ?>" <?= (string) ($event['status'] ?? 'draft') === $st ? 'selected' : '' ?>>
+                            <?= e(Event::statusLabel($st)) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <label style="display: block;">
+                <span class="hint" style="display: block; margin-bottom: 4px;">Tanggal &amp; jam mulai</span>
+                <input type="datetime-local" name="starts_at"
+                       value="<?= e(!empty($event['starts_at']) ? str_replace(' ', 'T', substr((string) $event['starts_at'], 0, 16)) : '') ?>">
+            </label>
+            <label style="display: block;">
+                <span class="hint" style="display: block; margin-bottom: 4px;">Tanggal &amp; jam selesai</span>
+                <input type="datetime-local" name="ends_at"
+                       value="<?= e(!empty($event['ends_at']) ? str_replace(' ', 'T', substr((string) $event['ends_at'], 0, 16)) : '') ?>">
+            </label>
+            <button class="btn btn-primary" type="submit">Simpan Pengaturan</button>
+        </div>
+    </form>
+</div>
+
+<div class="panel-box">
     <h3 style="margin-top: 0;">Unggah Berkas ke Galeri</h3>
     <p class="hint" style="margin-bottom: 12px;">
         Foto (JPG/PNG), GIF, atau boomerang/video (MP4/MOV), maks 25 MB per berkas.
