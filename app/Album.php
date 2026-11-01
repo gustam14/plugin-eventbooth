@@ -231,23 +231,28 @@ final class Album
     }
 
     /**
-     * URL gambar ukuran tertentu dari thumbnail Drive tersimpan:
-     * tautan thumbnail Google diakhiri penanda ukuran "=s220";
-     * mengganti angka itu meminta gambar yang sama pada ukuran
-     * lain dari CDN Google. Bila tautan kosong tetapi file_id
-     * ada, pola kanonis lh3 dipakai. null bila tak ada sumber.
+     * URL gambar ukuran tertentu dari CDN Google, diturunkan
+     * dari drive_file_id (lihat catatan kedaluwarsa di dalam).
+     * null bila tak ada sumber gambar sama sekali.
      */
     public static function sizedImageUrl(array $media, int $size): ?string
     {
         $size = max(64, min(2560, $size));
+        // Pola kanonis lh3 SELALU didahulukan: tautan thumbnail
+        // tersimpan dari metadata Drive adalah URL drive-storage
+        // bertanda tangan yang KEDALUWARSA dalam hitungan jam —
+        // galeri sesi pagi membalas 403 siang harinya walau
+        // berkasnya sehat (terbukti 2026-11-01: media 17–42 mati
+        // satu per satu, unduhannya tetap 200). Tautan tersimpan
+        // hanya cadangan terakhir bila file_id kosong.
+        $fileId = trim((string) ($media['drive_file_id'] ?? ''));
+        if ($fileId !== '') {
+            return 'https://lh3.googleusercontent.com/d/' . $fileId . '=s' . $size;
+        }
         $thumb = trim((string) ($media['thumbnail_link'] ?? ''));
         if ($thumb !== '') {
             $replaced = preg_replace('#=s\d+(?:-[a-z0-9]+)?$#i', '=s' . $size, $thumb);
             return is_string($replaced) ? $replaced : $thumb;
-        }
-        $fileId = trim((string) ($media['drive_file_id'] ?? ''));
-        if ($fileId !== '') {
-            return 'https://lh3.googleusercontent.com/d/' . $fileId . '=s' . $size;
         }
 
         return null;
