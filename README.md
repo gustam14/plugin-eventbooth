@@ -1,5 +1,14 @@
 # Plugin Eventbooth — Website
 
+- **Pemutar video memakai aliran inline (v0.12.4):** akar
+  masalah GIF tak berputar terbukti dari rantai header:
+  export=download menyajikan Content-Disposition: attachment
+  yang ditolak elemen <video> (berkasnya sendiri video/mp4
+  utuh). Album::streamUrl (export=view → inline) kini dipakai
+  cabang ?s=video; unduhan tetap export=download. Pengalihan
+  video tidak dicache (no-store) agar peramban tidak menyimpan
+  pengalihan lama.
+
 - **Kartu galeri ramping + putar GIF diperbaiki (v0.12.3):**
   tombol Lihat/Unduh dihapus dari kartu media halaman sesi
   (klik kartu membuka penampil; unduh hanya dari dalam

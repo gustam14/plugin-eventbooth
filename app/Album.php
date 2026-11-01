@@ -264,6 +264,25 @@ final class Album
         return 'https://drive.google.com/uc?export=download&id=' . $fileId;
     }
 
+    /**
+     * URL aliran untuk PEMUTAR video galeri. Berbeda dari
+     * downloadUrl hanya pada export=view: Drive menyajikan
+     * berkasnya dengan Content-Disposition: inline (tetap
+     * video/mp4), sedangkan export=download menyajikan
+     * attachment yang DITOLAK elemen <video> peramban —
+     * pemutar berhenti di layar hitam 0:00 (terbukti pada
+     * GIF sesi uji 9EYR9ETC, 2026-11-01).
+     */
+    public static function streamUrl(array $media): ?string
+    {
+        $fileId = trim((string) ($media['drive_file_id'] ?? ''));
+        if ($fileId === '') {
+            return null;
+        }
+
+        return 'https://drive.google.com/uc?export=view&id=' . $fileId;
+    }
+
     /** Label Indonesia untuk jenis media. */
     public static function kindLabel(string $kind): string
     {

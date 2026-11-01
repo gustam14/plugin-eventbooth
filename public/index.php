@@ -248,10 +248,13 @@ $serveMedia = static function (array $params, bool $download): void {
     // pemutar menerima URL gambar dan berhenti di layar hitam.
     $isVideoFile = (string) ($media['kind'] ?? '') === 'video'
         || (bool) preg_match('/\.(mp4|mov)$/i', (string) ($media['file_name'] ?? ''));
+    $forPlayer = !$download && $isVideoFile && ($_GET['s'] ?? '') === 'video';
     if ($download) {
         $target = Album::downloadUrl($media);
-    } elseif ($isVideoFile && ($_GET['s'] ?? '') === 'video') {
-        $target = Album::downloadUrl($media);
+    } elseif ($forPlayer) {
+        // Pemutar memakai aliran inline (export=view); URL
+        // unduhan (attachment) ditolak elemen <video>.
+        $target = Album::streamUrl($media);
     } else {
         $target = Album::sizedImageUrl($media, (($_GET['s'] ?? '') === 'full') ? 1920 : 1000);
     }
@@ -263,7 +266,10 @@ $serveMedia = static function (array $params, bool $download): void {
         return;
     }
 
-    header('Cache-Control: public, max-age=3600');
+    // Pengalihan gambar boleh dicache; pengalihan video tidak —
+    // peramban yang menyimpan pengalihan lama (?s=video ke URL
+    // unduhan) akan terus gagal memutar sampai cache-nya basi.
+    header('Cache-Control: ' . ($forPlayer ? 'no-store' : 'public, max-age=3600'));
     header('Location: ' . $target, true, 302);
 };
 
