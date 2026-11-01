@@ -1,5 +1,15 @@
 # Plugin Eventbooth — Website
 
+- **Galeri mandiri + folder Drive per event (v0.10.0):** halaman
+  album tidak lagi memuat tautan Google Drive — media disajikan
+  lewat rute domain sendiri `/media/{id}` (dan
+  `/media/{id}/download`) yang hanya mengarahkan 302 ke CDN
+  Google (byte tetap tidak lewat shared hosting). Halaman sesi
+  punya penampil lightbox di dalam situs (gambar besar, video,
+  filmstrip, navigasi keyboard). Struktur folder Drive berubah
+  PER EVENT: `{Tenant}/{Event}/final|originals|gif|video/
+  {KodeSesi}` — satu folder jenis berisi banyak sesi.
+
 - **URL galeri + album per sesi + folder gif/video (v0.9.0):**
   album event kini juga hidup di `/gallery/{slug-tenant}/
   {slug-event}` (URL lama `/e/{slug}` tetap bekerja; tautan

@@ -217,6 +217,60 @@ $router->get('/s/{code}', static function (array $params): void {
 });
 
 /* ---------------------------------------------------------------------
+ * Media publik lewat domain sendiri — /media/{id} dan
+ * /media/{id}/download. Galeri tampil sebagai website mandiri
+ * (tidak ada tautan Google Drive pada halaman): rute ini hanya
+ * MENGALIHKAN (302) ke berkas di CDN Google, jadi byte tidak
+ * pernah mengalir lewat shared hosting. ?s=full meminta gambar
+ * besar untuk penampil; ?s=video mengalihkan ke aliran video.
+ * ------------------------------------------------------------------- */
+$serveMedia = static function (array $params, bool $download): void {
+    $id = isset($params['id']) && is_numeric($params['id']) ? (int) $params['id'] : 0;
+    $pdo = Database::pdo();
+    $media = null;
+    if ($pdo !== null && $id > 0) {
+        try {
+            $media = Album::mediaById($pdo, $id);
+        } catch (PDOException) {
+            $media = null;
+        }
+    }
+    if ($media === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    if ($download) {
+        $target = Album::downloadUrl($media);
+    } elseif ((string) ($media['kind'] ?? '') === 'video' && ($_GET['s'] ?? '') === 'video') {
+        $target = Album::downloadUrl($media);
+    } else {
+        $target = Album::sizedImageUrl($media, (($_GET['s'] ?? '') === 'full') ? 1920 : 1000);
+    }
+    if ($target === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    header('Cache-Control: public, max-age=3600');
+    header('Location: ' . $target, true, 302);
+};
+
+$router->get('/media/{id}', static function (array $params) use ($serveMedia): void {
+    $serveMedia($params, false);
+});
+
+$router->get('/media/{id}/download', static function (array $params) use ($serveMedia): void {
+    $serveMedia($params, true);
+});
+
+/* ---------------------------------------------------------------------
  * Autentikasi (Milestone 2)
  * ------------------------------------------------------------------- */
 $router->get('/login', static function (): void {
@@ -3805,20 +3859,24 @@ $driveContext = static function (array $body) use ($appDeviceContext, $googleCre
 };
 
 /**
- * Pastikan rantai folder "Plugin Eventbooth/{NamaTenant}/
- * {NamaEvent}/{KodeSesi}" + subfolder `final` dan `originals`
- * ada pada akun Drive event, lalu kembalikan peta ID-nya.
+ * Pastikan struktur folder PER EVENT ada pada akun Drive event:
+ * "Plugin Eventbooth/{NamaTenant}/{NamaEvent}" lalu subfolder
+ * per jenis `final`, `originals`, `gif`, `video`, dan di dalam
+ * tiap subfolder jenis ada folder per kode sesi. Kembalikan
+ * peta ID folder TUJUAN UNGGAH per jenis (folder kode sesi di
+ * dalam subfolder jenisnya); kunci 'event'/'session' menunjuk
+ * folder event sebagai induk bersama.
  * Folder root memakai google_accounts.root_folder_id; bila
  * kosong (akun tertaut sebelum folder root sempat dibuat),
  * folder root dibuat sekarang dan ID-nya disimpan kembali.
- * ID folder sesi disimpan ke sessions.drive_folder_id secara
+ * ID folder event disimpan ke sessions.drive_folder_id secara
  * best-effort (folder tetap ditemukan lewat nama pada panggilan
  * berikutnya; skema events memang tidak punya kolom folder).
  *
  * @param array<string, mixed> $tenant  Baris tenant pemilik sesi.
  * @param array<string, mixed> $session Baris sesi + kolom event (Album::sessionWithEvent).
  * @param array<string, mixed> $account Baris google_accounts penampung event.
- * @return array{event: string, session: string, final: string, originals: string}
+ * @return array{event: string, session: string, final: string, originals: string, gif: string, video: string}
  * @throws GoogleDriveException
  */
 $ensureSessionFolders = static function (
@@ -3845,36 +3903,42 @@ $ensureSessionFolders = static function (
         }
     }
 
+    // Struktur PER EVENT (permintaan pemilik booth): folder
+    // event menampung subfolder per jenis — final, originals,
+    // gif, video — dan di dalam tiap subfolder jenis ada folder
+    // per kode sesi. Satu folder "final" dengan demikian berisi
+    // banyak sesi, bukan satu folder sesi berisi semua jenis.
     $ids = GoogleDrive::ensureFolderPath($accessToken, $rootId, [
         Tenant::displayName($tenant),
         (string) $session['event_name'],
-        (string) $session['code'],
     ]);
-    $sessionFolderId = $ids[2] ?? '';
-    if ($sessionFolderId === '') {
-        throw new GoogleDriveException('Folder sesi tidak dapat disiapkan.');
+    $eventFolderId = $ids[1] ?? '';
+    if ($eventFolderId === '') {
+        throw new GoogleDriveException('Folder event tidak dapat disiapkan.');
     }
 
-    $finalId = GoogleDrive::ensureFolder($accessToken, 'final', $sessionFolderId);
-    $originalsId = GoogleDrive::ensureFolder($accessToken, 'originals', $sessionFolderId);
-    $gifId = GoogleDrive::ensureFolder($accessToken, 'gif', $sessionFolderId);
-    $videoId = GoogleDrive::ensureFolder($accessToken, 'video', $sessionFolderId);
+    $code = (string) $session['code'];
+    $kindSessionIds = [];
+    foreach (['final', 'originals', 'gif', 'video'] as $kindFolder) {
+        $kindParentId = GoogleDrive::ensureFolder($accessToken, $kindFolder, $eventFolderId);
+        $kindSessionIds[$kindFolder] = GoogleDrive::ensureFolder($accessToken, $code, $kindParentId);
+    }
 
     if (empty($session['drive_folder_id'])) {
         try {
-            Album::saveSessionDriveFolder($pdo, (int) $session['id'], $sessionFolderId);
+            Album::saveSessionDriveFolder($pdo, (int) $session['id'], $eventFolderId);
         } catch (PDOException) {
             // Best-effort: ID dicari lagi lewat nama pada panggilan berikutnya.
         }
     }
 
     return [
-        'event' => $ids[1] ?? '',
-        'session' => $sessionFolderId,
-        'final' => $finalId,
-        'originals' => $originalsId,
-        'gif' => $gifId,
-        'video' => $videoId,
+        'event' => $eventFolderId,
+        'session' => $eventFolderId,
+        'final' => $kindSessionIds['final'],
+        'originals' => $kindSessionIds['originals'],
+        'gif' => $kindSessionIds['gif'],
+        'video' => $kindSessionIds['video'],
     ];
 };
 

@@ -19,6 +19,14 @@ $guestName = trim((string) ($session['guest_name'] ?? ''));
 $createdLabel = isset($session['created_at'])
     ? License::formatDateId((string) $session['created_at'])
     : '';
+$lbItems = [];
+foreach (($media ?? []) as $item) {
+    $lbItems[] = [
+        'id' => (int) ($item['id'] ?? 0),
+        'kind' => (string) ($item['kind'] ?? 'final'),
+        'name' => trim((string) ($item['file_name'] ?? '')),
+    ];
+}
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -132,6 +140,63 @@ $createdLabel = isset($session['created_at'])
         color: var(--muted); font-size: 16px;
     }
 
+    /* ---------- Penampil media (lightbox, di dalam situs) ---------- */
+    .media-card .cover-btn { width: 100%; border: 0; padding: 0; cursor: zoom-in; position: relative; font: inherit; }
+    .media-card .play-badge {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        color: #fff; background: rgba(5, 6, 8, .25);
+    }
+    .media-card .play-badge span {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 52px; height: 52px; border-radius: 50%;
+        background: rgba(8, 10, 13, .72); border: 1px solid rgba(255, 255, 255, .35);
+    }
+    .media-card .actions button {
+        flex: 1; text-align: center; font-size: 13.5px; font-weight: 700; font-family: inherit;
+        padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line-strong);
+        color: var(--text); background: transparent; cursor: pointer;
+        transition: border-color 150ms ease;
+    }
+    .media-card .actions button:hover { border-color: rgba(201, 162, 75, .55); }
+    .lightbox {
+        position: fixed; inset: 0; z-index: 200; display: none;
+        background: rgba(4, 5, 7, .96); flex-direction: column;
+    }
+    .lightbox.open { display: flex; }
+    .lb-top {
+        display: flex; align-items: center; justify-content: space-between; gap: 14px;
+        padding: 12px 16px; color: #fff;
+    }
+    .lb-counter { font-size: 14px; font-weight: 600; color: var(--muted); min-width: 64px; }
+    .lb-actions { display: flex; align-items: center; gap: 8px; }
+    .lb-actions a, .lb-actions button {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--line-strong);
+        background: rgba(255, 255, 255, .04); color: #fff; cursor: pointer; font-family: inherit;
+    }
+    .lb-actions a:hover, .lb-actions button:hover { border-color: rgba(201, 162, 75, .6); text-decoration: none; }
+    .lb-stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 4px 12px; }
+    .lb-stage img, .lb-stage video { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
+    .lb-nav {
+        position: absolute; top: 50%; transform: translateY(-50%);
+        width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line-strong);
+        background: rgba(10, 12, 15, .65); color: #fff; font-size: 20px; cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .lb-nav.prev { left: 12px; }
+    .lb-nav.next { right: 12px; }
+    .lb-caption { text-align: center; color: var(--muted); font-size: 13.5px; padding: 8px 16px 4px; word-break: break-all; }
+    .lb-strip {
+        display: flex; gap: 8px; justify-content: flex-start; overflow-x: auto;
+        padding: 10px 16px 16px; max-width: 100%;
+    }
+    .lb-strip button {
+        flex: none; width: 62px; height: 62px; border-radius: 8px; overflow: hidden;
+        border: 2px solid transparent; padding: 0; cursor: pointer; background: #0D1015;
+    }
+    .lb-strip button.active { border-color: var(--gold); }
+    .lb-strip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
     /* ---------- Kaki (pola sama dengan landing) ---------- */
     footer.site-foot { border-top: 1px solid var(--line); margin-top: 72px; }
     footer.site-foot .wrap {
@@ -188,40 +253,38 @@ $createdLabel = isset($session['created_at'])
             <div class="empty">Foto sesi ini belum tersedia — silakan periksa lagi sebentar lagi.</div>
         <?php else: ?>
             <div class="grid">
-                <?php foreach ($media as $item): ?>
+                <?php foreach ($media as $idx => $item): ?>
                     <?php
-                    $thumbUrl = trim((string) ($item['thumbnail_link'] ?? ''));
-                    $viewUrl = Album::viewUrl($item);
-                    $downloadUrl = Album::downloadUrl($item);
+                    $mediaId = (int) ($item['id'] ?? 0);
+                    $kind = (string) ($item['kind'] ?? 'final');
+                    $hasImage = trim((string) ($item['thumbnail_link'] ?? '')) !== ''
+                        || trim((string) ($item['drive_file_id'] ?? '')) !== '';
                     $fileName = trim((string) ($item['file_name'] ?? ''));
                     ?>
                     <figure class="media-card">
-                        <span class="cover">
-                            <?php if ($thumbUrl !== '' && $viewUrl !== null): ?>
-                                <a href="<?= e($viewUrl) ?>" target="_blank" rel="noopener">
-                                    <img src="<?= e($thumbUrl) ?>" alt="<?= e(Album::kindLabel((string) ($item['kind'] ?? 'final'))) ?> sesi <?= e($code) ?>" loading="lazy">
-                                </a>
-                            <?php elseif ($thumbUrl !== ''): ?>
-                                <img src="<?= e($thumbUrl) ?>" alt="<?= e(Album::kindLabel((string) ($item['kind'] ?? 'final'))) ?> sesi <?= e($code) ?>" loading="lazy">
+                        <button type="button" class="cover cover-btn" data-open="<?= (int) $idx ?>" aria-label="Lihat <?= e(Album::kindLabel($kind)) ?>">
+                            <?php if ($hasImage): ?>
+                                <img src="/media/<?= $mediaId ?>" alt="<?= e(Album::kindLabel($kind)) ?> sesi <?= e($code) ?>" loading="lazy">
                             <?php else: ?>
                                 <span class="placeholder">
                                     <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.6L8.5 5.5h7L17.4 8H20a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="13.2" r="3.4"/></svg>
-                                    <?= e(Album::kindLabel((string) ($item['kind'] ?? 'final'))) ?>
+                                    <?= e(Album::kindLabel($kind)) ?>
                                 </span>
                             <?php endif; ?>
-                        </span>
+                            <?php if ($kind === 'video'): ?>
+                                <span class="play-badge"><span>
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
+                                </span></span>
+                            <?php endif; ?>
+                        </button>
                         <span class="body" style="display: block;">
-                            <span class="kind"><?= e(Album::kindLabel((string) ($item['kind'] ?? 'final'))) ?></span>
+                            <span class="kind"><?= e(Album::kindLabel($kind)) ?></span>
                             <?php if ($fileName !== ''): ?>
                                 <span class="file" style="display: block;"><?= e($fileName) ?></span>
                             <?php endif; ?>
                             <span class="actions">
-                                <?php if ($viewUrl !== null): ?>
-                                    <a href="<?= e($viewUrl) ?>" target="_blank" rel="noopener">Lihat</a>
-                                <?php endif; ?>
-                                <?php if ($downloadUrl !== null): ?>
-                                    <a class="download" href="<?= e($downloadUrl) ?>" target="_blank" rel="noopener">Unduh</a>
-                                <?php endif; ?>
+                                <button type="button" data-open="<?= (int) $idx ?>">Lihat</button>
+                                <a class="download" href="/media/<?= $mediaId ?>/download">Unduh</a>
                             </span>
                         </span>
                     </figure>
@@ -242,6 +305,107 @@ $createdLabel = isset($session['created_at'])
         <p>&copy; <?= date('Y') ?> <?= e($appName) ?> · Bagian dari EventBooth · <a href="/privacy">Kebijakan Privasi</a> · <a href="/terms">Syarat Layanan</a> · <span title="Versi aplikasi">v<?= e($version) ?></span></p>
     </div>
 </footer>
+
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Penampil media sesi">
+    <div class="lb-top">
+        <span class="lb-counter" id="lbCounter"></span>
+        <span class="lb-actions">
+            <a id="lbDownload" href="#" aria-label="Unduh berkas ini">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M4.5 20h15"/></svg>
+            </a>
+            <button type="button" id="lbClose" aria-label="Tutup penampil">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>
+            </button>
+        </span>
+    </div>
+    <div class="lb-stage" id="lbStage"></div>
+    <button type="button" class="lb-nav prev" id="lbPrev" aria-label="Sebelumnya">&lsaquo;</button>
+    <button type="button" class="lb-nav next" id="lbNext" aria-label="Berikutnya">&rsaquo;</button>
+    <div class="lb-caption" id="lbCaption"></div>
+    <div class="lb-strip" id="lbStrip"></div>
+</div>
+
+<script>
+(function () {
+    var ITEMS = <?= json_encode($lbItems, JSON_UNESCAPED_SLASHES) ?>;
+    if (!ITEMS.length) return;
+    var box = document.getElementById('lightbox');
+    var stage = document.getElementById('lbStage');
+    var counter = document.getElementById('lbCounter');
+    var caption = document.getElementById('lbCaption');
+    var strip = document.getElementById('lbStrip');
+    var download = document.getElementById('lbDownload');
+    var current = 0;
+
+    ITEMS.forEach(function (item, i) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.setAttribute('aria-label', 'Item ' + (i + 1));
+        var img = document.createElement('img');
+        img.src = '/media/' + item.id;
+        img.alt = '';
+        img.loading = 'lazy';
+        b.appendChild(img);
+        b.addEventListener('click', function () { show(i); });
+        strip.appendChild(b);
+    });
+
+    function show(i) {
+        current = (i + ITEMS.length) % ITEMS.length;
+        var item = ITEMS[current];
+        stage.innerHTML = '';
+        if (item.kind === 'video') {
+            var video = document.createElement('video');
+            video.src = '/media/' + item.id + '?s=video';
+            video.controls = true;
+            video.autoplay = true;
+            video.playsInline = true;
+            stage.appendChild(video);
+        } else {
+            var img = document.createElement('img');
+            img.src = '/media/' + item.id + '?s=full';
+            img.alt = item.name || '';
+            stage.appendChild(img);
+        }
+        counter.textContent = (current + 1) + ' / ' + ITEMS.length;
+        caption.textContent = item.name || '';
+        download.href = '/media/' + item.id + '/download';
+        Array.prototype.forEach.call(strip.children, function (el, j) {
+            el.classList.toggle('active', j === current);
+        });
+    }
+
+    function open(i) {
+        box.classList.add('open');
+        document.body.style.overflow = 'hidden';
+        show(i);
+    }
+
+    function close() {
+        box.classList.remove('open');
+        document.body.style.overflow = '';
+        stage.innerHTML = '';
+    }
+
+    document.querySelectorAll('[data-open]').forEach(function (el) {
+        el.addEventListener('click', function () {
+            open(parseInt(el.getAttribute('data-open'), 10) || 0);
+        });
+    });
+    document.getElementById('lbClose').addEventListener('click', close);
+    document.getElementById('lbPrev').addEventListener('click', function () { show(current - 1); });
+    document.getElementById('lbNext').addEventListener('click', function () { show(current + 1); });
+    box.addEventListener('click', function (ev) {
+        if (ev.target === box || ev.target === stage) close();
+    });
+    document.addEventListener('keydown', function (ev) {
+        if (!box.classList.contains('open')) return;
+        if (ev.key === 'Escape') close();
+        if (ev.key === 'ArrowLeft') show(current - 1);
+        if (ev.key === 'ArrowRight') show(current + 1);
+    });
+})();
+</script>
 
 </body>
 </html>

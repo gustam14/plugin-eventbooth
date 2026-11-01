@@ -119,6 +119,12 @@ $slug = (string) ($event['slug'] ?? '');
     }
     .session-card .badge.count { left: 10px; }
     .session-card .badge.video { right: 10px; background: rgba(201, 162, 75, .92); color: var(--gold-ink); }
+    .session-card .cover .time {
+        position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+        padding: 22px 12px 9px; text-align: center;
+        background: linear-gradient(180deg, transparent, rgba(5, 6, 8, .82));
+        color: #fff; font-size: 15px; font-weight: 800; letter-spacing: .05em;
+    }
     .session-card .cover .placeholder {
         display: flex; flex-direction: column; align-items: center; gap: 8px;
         color: var(--muted-2); font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
@@ -201,15 +207,18 @@ $slug = (string) ($event['slug'] ?? '');
                     <?php
                     $guestName = trim((string) ($session['guest_name'] ?? ''));
                     $coverUrl = trim((string) ($session['cover_url'] ?? ''));
+                    $coverMediaId = (int) ($session['cover_media_id'] ?? 0);
+                    $coverSrc = $coverMediaId > 0 ? '/media/' . $coverMediaId : $coverUrl;
                     $createdTs = isset($session['created_at']) ? strtotime((string) $session['created_at']) : false;
                     $createdLabel = $createdTs !== false
                         ? License::formatDateId((string) $session['created_at']) . ' · ' . date('H:i', $createdTs)
                         : '';
+                    $timeLabel = $createdTs !== false ? date('H:i', $createdTs) : '';
                     ?>
                     <a class="session-card" href="/s/<?= e((string) $session['code']) ?>">
                         <span class="cover">
-                            <?php if ($coverUrl !== ''): ?>
-                                <img src="<?= e($coverUrl) ?>" alt="Foto sesi <?= e((string) $session['code']) ?>" loading="lazy">
+                            <?php if ($coverSrc !== ''): ?>
+                                <img src="<?= e($coverSrc) ?>" alt="Foto sesi <?= e((string) $session['code']) ?>" loading="lazy">
                             <?php else: ?>
                                 <span class="placeholder">
                                     <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.6L8.5 5.5h7L17.4 8H20a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="13.2" r="3.4"/></svg>
@@ -225,6 +234,9 @@ $slug = (string) ($event['slug'] ?? '');
                                     <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M7 5.5v13l11-6.5z"/></svg>
                                     VIDEO
                                 </span>
+                            <?php endif; ?>
+                            <?php if ($timeLabel !== ''): ?>
+                                <span class="time"><?= e($timeLabel) ?></span>
                             <?php endif; ?>
                         </span>
                         <span class="body">

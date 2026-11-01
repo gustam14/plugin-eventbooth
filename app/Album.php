@@ -126,7 +126,18 @@ final class Album
                                     ELSE 2
                                END,
                                m.id ASC
-                      LIMIT 1) AS cover_url
+                      LIMIT 1) AS cover_url,
+                    (SELECT m.id FROM media_files m
+                      WHERE m.session_id = s.id
+                        AND m.thumbnail_link IS NOT NULL
+                        AND m.thumbnail_link <> \'\'
+                      ORDER BY CASE m.kind
+                                    WHEN \'final\' THEN 0
+                                    WHEN \'thumb\' THEN 1
+                                    ELSE 2
+                               END,
+                               m.id ASC
+                      LIMIT 1) AS cover_media_id
                FROM sessions s
               WHERE s.event_id = :event_id
               ORDER BY s.created_at DESC, s.id DESC
@@ -200,6 +211,43 @@ final class Album
         $fileId = trim((string) ($media['drive_file_id'] ?? ''));
         if ($fileId !== '') {
             return 'https://drive.google.com/file/d/' . $fileId . '/view';
+        }
+
+        return null;
+    }
+
+    /**
+     * Satu baris media dari ID-nya (rute /media/{id}).
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function mediaById(PDO $pdo, int $id): ?array
+    {
+        $stmt = $pdo->prepare('SELECT * FROM media_files WHERE id = :id LIMIT 1');
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    /**
+     * URL gambar ukuran tertentu dari thumbnail Drive tersimpan:
+     * tautan thumbnail Google diakhiri penanda ukuran "=s220";
+     * mengganti angka itu meminta gambar yang sama pada ukuran
+     * lain dari CDN Google. Bila tautan kosong tetapi file_id
+     * ada, pola kanonis lh3 dipakai. null bila tak ada sumber.
+     */
+    public static function sizedImageUrl(array $media, int $size): ?string
+    {
+        $size = max(64, min(2560, $size));
+        $thumb = trim((string) ($media['thumbnail_link'] ?? ''));
+        if ($thumb !== '') {
+            $replaced = preg_replace('#=s\d+(?:-[a-z0-9]+)?$#i', '=s' . $size, $thumb);
+            return is_string($replaced) ? $replaced : $thumb;
+        }
+        $fileId = trim((string) ($media['drive_file_id'] ?? ''));
+        if ($fileId !== '') {
+            return 'https://lh3.googleusercontent.com/d/' . $fileId . '=s' . $size;
         }
 
         return null;
