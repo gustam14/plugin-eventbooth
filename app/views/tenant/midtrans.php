@@ -91,9 +91,9 @@ $env = $cfg['environment'] ?? 'sandbox';
         milikmu — kolom itu biarkan untuk sistemmu yang lain
         (misalnya website utamamu). Notifikasi untuk transaksi
         booth diarahkan khusus per transaksi ke sistem kami lewat
-        mekanisme override Midtrans, dan alamat tujuannya adalah:
+        mekanisme override Midtrans, jadi tidak ada alamat apa pun
+        yang perlu kamu isi di dashboard Midtrans.
     </p>
-    <p><code><?= e($guestNotifyUrl) ?></code></p>
 </div>
 
 <?php if (($orders ?? []) !== []): ?>

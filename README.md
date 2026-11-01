@@ -1,5 +1,11 @@
 # Plugin Eventbooth — Website
 
+- **Klarifikasi instruksi Midtrans tenant (v0.11.2):** URL
+  endpoint notifikasi dihapus dari kartu "Cara kerja" halaman
+  /tenant/midtrans — menampilkannya tetap terbaca sebagai
+  instruksi untuk mengisi dashboard Midtrans, padahal override
+  per transaksi membuatnya tidak perlu.
+
 - **Perbaikan notifikasi tamu (v0.11.1):** tombol "Test
   notification URL" Midtrans gagal karena endpoint menjawab 404
   untuk order contoh yang tidak dikenal. Kini endpoint selalu
