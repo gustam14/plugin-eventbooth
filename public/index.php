@@ -4633,8 +4633,8 @@ $router->post('/tenant/events/{id}/album/upload', static function (array $params
             redirect($back);
         }
         $folders = $ensureSessionFolders($pdo, $tenant, $session, $account, $accessToken);
-    } catch (GoogleDriveException) {
-        Flash::error('Folder penyimpanan gagal disiapkan. Silakan coba lagi.');
+    } catch (GoogleDriveException $e) {
+        Flash::error('Folder penyimpanan gagal disiapkan: ' . $e->getMessage());
         redirect($back);
     } catch (RuntimeException $e) {
         Flash::error($e->getMessage());
@@ -4684,18 +4684,22 @@ $router->post('/tenant/events/{id}/album/upload', static function (array $params
                 $mime,
                 $file['size']
             );
-            $handle = fopen($file['tmp_name'], 'rb');
-            if ($handle === false) {
-                $failures[] = $label . ': berkas tidak terbaca';
+            // Seluruh byte dibaca lalu dikirim sebagai badan PUT.
+            // (Cara INFILE sebelumnya terbukti mengirim badan
+            // kosong pada hosting ini — Google menolaknya dan
+            // sesi manual tertinggal 0 berkas, 2026-11-01.)
+            $bodyBytes = file_get_contents($file['tmp_name']);
+            if ($bodyBytes === false || strlen($bodyBytes) !== $file['size']) {
+                $failures[] = $label . ': berkas tidak terbaca utuh';
                 continue;
             }
             $ch = curl_init($uploadUrl);
             curl_setopt_array($ch, [
                 CURLOPT_CUSTOMREQUEST => 'PUT',
-                CURLOPT_INFILE => $handle,
-                CURLOPT_INFILESIZE => $file['size'],
+                CURLOPT_POSTFIELDS => $bodyBytes,
                 CURLOPT_HTTPHEADER => [
                     'Content-Type: ' . $mime,
+                    'Content-Length: ' . $file['size'],
                     'Content-Range: bytes 0-' . ($file['size'] - 1) . '/' . $file['size'],
                 ],
                 CURLOPT_RETURNTRANSFER => true,
@@ -4703,16 +4707,17 @@ $router->post('/tenant/events/{id}/album/upload', static function (array $params
                 CURLOPT_TIMEOUT => 180,
             ]);
             $rawResp = curl_exec($ch);
+            $curlError = curl_errno($ch) !== 0 ? curl_error($ch) : '';
             $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
             curl_close($ch);
-            fclose($handle);
             $fileId = null;
             if (is_string($rawResp) && ($status === 200 || $status === 201)) {
                 $decoded = json_decode($rawResp, true);
                 $fileId = is_array($decoded) && isset($decoded['id']) ? (string) $decoded['id'] : null;
             }
             if ($fileId === null || $fileId === '') {
-                $failures[] = $label . ': Google menolak unggahan';
+                $detail = $curlError !== '' ? $curlError : 'HTTP ' . $status;
+                $failures[] = $label . ': Google menolak unggahan (' . $detail . ')';
                 continue;
             }
             $metadata = GoogleDrive::fileMetadataOrFail($accessToken, $fileId);
@@ -4731,8 +4736,8 @@ $router->post('/tenant/events/{id}/album/upload', static function (array $params
                 'thumbnail_link' => $metadata['thumbnail_link'],
             ]);
             $okCount++;
-        } catch (GoogleDriveException) {
-            $failures[] = $label . ': gagal di Google Drive';
+        } catch (GoogleDriveException $e) {
+            $failures[] = $label . ': ' . $e->getMessage();
         } catch (PDOException) {
             $failures[] = $label . ': gagal dicatat';
         }
