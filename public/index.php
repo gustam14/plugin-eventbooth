@@ -3576,6 +3576,63 @@ $router->post('/api/automation/purge-session', static function () use ($automati
         Json::error('Pembersihan sesi gagal dicatat.', 503, 'server_not_configured');
     }
 
+    // Permintaan pemilik (1 Nov 2026): bila purge ini menghabiskan
+    // sesi TERAKHIR event, event/albumnya ikut dihapus — folder
+    // event di Drive dibuang dulu (gagal di Google = event
+    // dipertahankan sebagai album kosong), lalu baris event
+    // dihapus (paket tercascade; riwayat pembayaran lepas tautan
+    // SET NULL — sama seperti Hapus Event manual). Event yang
+    // belum pernah punya sesi tidak tersentuh: aturan ini hanya
+    // berjalan sebagai akibat sebuah purge.
+    $eventDeleted = false;
+    $eventDeleteNote = null;
+    $eventId = (int) ($session['event_id'] ?? 0);
+    if ($eventId > 0) {
+        try {
+            $countStmt = $pdo->prepare('SELECT COUNT(*) FROM sessions WHERE event_id = :event');
+            $countStmt->execute(['event' => $eventId]);
+            if ((int) $countStmt->fetchColumn() === 0) {
+                $eventAccountId = (int) ($session['event_drive_account_id'] ?? 0);
+                $eventFolderId = (string) ($session['drive_folder_id'] ?? '');
+                if ($eventFolderId === '' && $eventAccountId > 0) {
+                    // Cadangan: cari folder event lewat jalur nama
+                    // Plugin Eventbooth/{Tenant}/{Event} — find-only,
+                    // tidak membuat folder baru.
+                    $accountRow = GoogleAccount::find($pdo, $eventAccountId);
+                    $tenantRow = Tenant::find($pdo, $tenantId);
+                    if ($accountRow !== null && $tenantRow !== null) {
+                        $token = $tokenFor($eventAccountId);
+                        $rootId = (string) ($accountRow['root_folder_id'] ?? '');
+                        if ($rootId === '') {
+                            $rootId = GoogleDrive::findFolder($token, 'Plugin Eventbooth', 'root') ?? '';
+                        }
+                        if ($rootId !== '') {
+                            $tenantFolderId = GoogleDrive::findFolder($token, Tenant::displayName($tenantRow), $rootId);
+                            if ($tenantFolderId !== null) {
+                                $eventFolderId = GoogleDrive::findFolder(
+                                    $token,
+                                    (string) ($session['event_name'] ?? ''),
+                                    $tenantFolderId
+                                ) ?? '';
+                            }
+                        }
+                    }
+                }
+                if ($eventFolderId !== '' && $eventAccountId > 0) {
+                    GoogleDrive::deleteFileOrFail($tokenFor($eventAccountId), $eventFolderId);
+                }
+                $pdo->prepare('DELETE FROM events WHERE id = :id')->execute(['id' => $eventId]);
+                $eventDeleted = true;
+            }
+        } catch (GoogleDriveException $e) {
+            $eventDeleteNote = 'Folder event di Drive gagal dibuang (' . $e->getMessage() . '); event dipertahankan.';
+        } catch (RuntimeException $e) {
+            $eventDeleteNote = $e->getMessage();
+        } catch (PDOException) {
+            $eventDeleteNote = 'Penghapusan event gagal dicatat.';
+        }
+    }
+
     $tenant = null;
     try {
         $tenant = Tenant::find($pdo, $tenantId);
@@ -3607,6 +3664,8 @@ $router->post('/api/automation/purge-session', static function () use ($automati
         'whatsapp' => $whatsapp,
         'plan_name' => $retention['plan_name'],
         'retention_days' => $retDays,
+        'event_deleted' => $eventDeleted,
+        'event_delete_note' => $eventDeleteNote,
         'message' => $message,
     ]);
 });
