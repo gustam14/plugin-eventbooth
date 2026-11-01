@@ -414,6 +414,33 @@ final class GoogleDrive
     }
 
     /**
+     * Hapus permanen satu file di Drive (dipakai Kelola Album
+     * tenant, v0.14.0). File yang sudah tidak ada (404) dianggap
+     * berhasil — tujuan akhirnya sama: file tidak lagi tersimpan.
+     *
+     * @throws GoogleDriveException
+     */
+    public static function deleteFileOrFail(string $accessToken, string $fileId): void
+    {
+        $status = null;
+        $raw = self::send(
+            'DELETE',
+            self::FILES_ENDPOINT . '/' . urlencode($fileId) . '?supportsAllDrives=true',
+            ['Authorization: Bearer ' . $accessToken],
+            null,
+            $status
+        );
+        if ($raw === null || $status === null) {
+            throw new GoogleDriveException('Koneksi ke Google Drive gagal saat menghapus file.');
+        }
+        if ($status === 404 || ($status >= 200 && $status < 300)) {
+            return;
+        }
+
+        throw new GoogleDriveException("Google menolak penghapusan file (HTTP {$status}).");
+    }
+
+    /**
      * Cabut token di sisi Google (usaha terbaik; hasil diabaikan
      * pemanggil — pemutusan lokal tetap berjalan apa pun hasilnya).
      */

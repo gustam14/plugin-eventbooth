@@ -1,5 +1,15 @@
 # Plugin Eventbooth — Website
 
+- **Kelola Album tenant (v0.14.0):** halaman dashboard baru
+  /tenant/events/{id}/album (tautan "Kelola Album" di daftar
+  Event): daftar sesi + media event, HAPUS per berkas / per
+  sesi / seluruh isi album (file Drive ikut terhapus —
+  GoogleDrive::deleteFileOrFail, 404 toleran), dan UNGGAH
+  manual foto/GIF/boomerang/video ke sesi yang ada atau sesi
+  manual baru lewat pipa Drive yang sama dengan aplikasi
+  (folder per event/sesi, izin anyone-reader, registrasi
+  media). Semua operasi dibatasi kepemilikan event + CSRF.
+
 - **Streaming video dari server sendiri (v0.13.0, pilihan
   pemilik "ala fotoshare"):** kelas MediaStream meneruskan
   byte video/GIF dari Drive API (alt=media, token akun pusat

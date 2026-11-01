@@ -63,6 +63,7 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
                 </td>
                 <td>
                     <div class="row-actions">
+                        <a class="btn btn-small" href="/tenant/events/<?= (int) $event['id'] ?>/album">Kelola Album</a>
                         <a class="btn btn-small" href="/tenant/events/<?= (int) $event['id'] ?>/edit">Ubah</a>
                     </div>
                 </td>

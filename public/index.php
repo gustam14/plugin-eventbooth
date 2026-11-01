@@ -4198,6 +4198,415 @@ $router->post('/api/drive/complete', static function () use ($readJsonBody, $dri
 });
 
 /* ---------------------------------------------------------------------
+ * Kelola Album tenant (v0.14.0, permintaan pemilik): dari dashboard,
+ * tenant dapat MENGHAPUS album/sesi/foto/GIF event-nya dan
+ * MENGUNGGAH foto/GIF/boomerang manual ke galeri event. Berkas
+ * tersimpan di akun Drive pusat; penghapusan membuang file di
+ * Drive DAN baris medianya, pengunggahan memakai pipa yang sama
+ * dengan unggahan aplikasi (folder per event/sesi + registrasi
+ * media). Semua rute dibatasi kepemilikan event tenant yang login.
+ * ------------------------------------------------------------------- */
+
+/** Token Drive untuk satu akun google_accounts; RuntimeException berpesan ramah pengguna. */
+$driveTokenForAccount = static function (PDO $pdo, int $accountId) use ($googleCredentials): array {
+    if ($accountId <= 0) {
+        throw new RuntimeException('Event ini belum memiliki akun penyimpanan. Minta admin menugaskan akun Drive pada event ini.');
+    }
+    $account = GoogleAccount::find($pdo, $accountId);
+    if ($account === null || (string) ($account['status'] ?? '') !== 'connected') {
+        throw new RuntimeException('Akun penyimpanan sedang tidak terhubung. Minta admin memeriksa menu Google Drive.');
+    }
+    $creds = $googleCredentials($pdo);
+    $clientSecret = $creds['secret_cipher'] !== null ? Crypto::decrypt($creds['secret_cipher']) : null;
+    $refreshToken = Crypto::decrypt((string) ($account['refresh_token_encrypted'] ?? ''));
+    if ($creds['client_id'] === '' || $clientSecret === null || $clientSecret === ''
+        || $refreshToken === null || $refreshToken === '') {
+        throw new RuntimeException('Kredensial Google Drive belum lengkap di server.');
+    }
+    try {
+        $accessToken = GoogleDrive::accessTokenOrFail($creds['client_id'], $clientSecret, $refreshToken);
+    } catch (GoogleDriveException) {
+        throw new RuntimeException('Koneksi ke Google Drive gagal. Silakan coba lagi.');
+    }
+
+    return [$account, $accessToken];
+};
+
+/** Event milik tenant yang login, atau null (pemanggil mengalihkan). */
+$tenantAlbumEvent = static function (PDO $pdo, int $tenantId, array $params): ?array {
+    $id = isset($params['id']) && is_numeric($params['id']) ? (int) $params['id'] : 0;
+
+    return $id > 0 ? Event::findForTenant($pdo, $tenantId, $id) : null;
+};
+
+/** Hapus satu media: file di Drive dulu, lalu barisnya. */
+$deleteOneMedia = static function (PDO $pdo, array $event, array $media) use ($driveTokenForAccount): void {
+    $accountId = (int) ($media['drive_account_id'] ?? 0);
+    if ($accountId <= 0) {
+        $accountId = (int) ($event['drive_account_id'] ?? 0);
+    }
+    [, $accessToken] = $driveTokenForAccount($pdo, $accountId);
+    GoogleDrive::deleteFileOrFail($accessToken, (string) ($media['drive_file_id'] ?? ''));
+    $stmt = $pdo->prepare('DELETE FROM media_files WHERE id = :id');
+    $stmt->execute(['id' => (int) $media['id']]);
+};
+
+$router->get('/tenant/events/{id}/album', static function (array $params) use ($tenantAlbumEvent): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+
+    $sessions = [];
+    try {
+        $stmt = $pdo->prepare(
+            'SELECT * FROM sessions WHERE event_id = :event ORDER BY created_at DESC, id DESC'
+        );
+        $stmt->execute(['event' => (int) $event['id']]);
+        foreach ($stmt->fetchAll() as $session) {
+            $media = Album::mediaForSession($pdo, (int) $session['id']);
+            $sessions[] = [
+                'session' => $session,
+                'media' => array_slice($media, 0, 120),
+                'media_total' => count($media),
+            ];
+        }
+    } catch (PDOException) {
+        $sessions = [];
+    }
+
+    View::render('tenant/events/album', [
+        'appName' => Config::appName(),
+        'appUrl' => Config::appUrl(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'event' => $event,
+        'sessionsData' => $sessions,
+    ]);
+});
+
+$router->post('/tenant/events/{id}/album/media/{mediaId}/delete', static function (array $params) use ($tenantAlbumEvent, $deleteOneMedia): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    $back = '/tenant/events/' . (int) ($params['id'] ?? 0) . '/album';
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    $mediaId = isset($params['mediaId']) && is_numeric($params['mediaId']) ? (int) $params['mediaId'] : 0;
+    if ($event === null || $mediaId <= 0) {
+        Flash::error('Media tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    try {
+        $media = Album::mediaById($pdo, $mediaId);
+        if ($media === null || (int) ($media['event_id'] ?? 0) !== (int) $event['id']) {
+            Flash::error('Media tidak ditemukan pada event ini.');
+            redirect($back);
+        }
+        $deleteOneMedia($pdo, $event, $media);
+        Flash::success('Berkas "' . (string) ($media['file_name'] ?? '') . '" terhapus dari galeri dan penyimpanan.');
+    } catch (GoogleDriveException $e) {
+        Flash::error('Gagal menghapus berkas: ' . $e->getMessage());
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+    } catch (PDOException) {
+        Flash::error('Berkas gagal dihapus. Silakan coba lagi.');
+    }
+    redirect($back);
+});
+
+$router->post('/tenant/events/{id}/album/sessions/{sessionId}/delete', static function (array $params) use ($tenantAlbumEvent, $deleteOneMedia): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    $back = '/tenant/events/' . (int) ($params['id'] ?? 0) . '/album';
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    $sessionId = isset($params['sessionId']) && is_numeric($params['sessionId']) ? (int) $params['sessionId'] : 0;
+    if ($event === null || $sessionId <= 0) {
+        Flash::error('Sesi tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    try {
+        $session = Album::sessionWithEvent($pdo, $sessionId);
+        if ($session === null || (int) ($session['event_id'] ?? 0) !== (int) $event['id']) {
+            Flash::error('Sesi tidak ditemukan pada event ini.');
+            redirect($back);
+        }
+        $media = Album::mediaForSession($pdo, $sessionId);
+        foreach ($media as $item) {
+            $deleteOneMedia($pdo, $event, $item);
+        }
+        $stmt = $pdo->prepare('DELETE FROM sessions WHERE id = :id');
+        $stmt->execute(['id' => $sessionId]);
+        Flash::success('Sesi ' . (string) ($session['code'] ?? '') . ' terhapus beserta ' . count($media) . ' berkasnya.');
+    } catch (GoogleDriveException $e) {
+        Flash::error('Gagal menghapus sesi: ' . $e->getMessage());
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+    } catch (PDOException) {
+        Flash::error('Sesi gagal dihapus. Silakan coba lagi.');
+    }
+    redirect($back);
+});
+
+$router->post('/tenant/events/{id}/album/wipe', static function (array $params) use ($tenantAlbumEvent, $deleteOneMedia): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    $back = '/tenant/events/' . (int) ($params['id'] ?? 0) . '/album';
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    try {
+        $stmt = $pdo->prepare('SELECT id FROM sessions WHERE event_id = :event');
+        $stmt->execute(['event' => (int) $event['id']]);
+        $sessionIds = array_map(static fn (array $r): int => (int) $r['id'], $stmt->fetchAll());
+        $deletedFiles = 0;
+        foreach ($sessionIds as $sessionId) {
+            foreach (Album::mediaForSession($pdo, $sessionId) as $item) {
+                $deleteOneMedia($pdo, $event, $item);
+                $deletedFiles++;
+            }
+            $del = $pdo->prepare('DELETE FROM sessions WHERE id = :id');
+            $del->execute(['id' => $sessionId]);
+        }
+        Flash::success('Album event dikosongkan: ' . count($sessionIds) . ' sesi dan ' . $deletedFiles . ' berkas terhapus.');
+    } catch (GoogleDriveException $e) {
+        Flash::error('Gagal mengosongkan album: ' . $e->getMessage());
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+    } catch (PDOException) {
+        Flash::error('Album gagal dikosongkan. Silakan coba lagi.');
+    }
+    redirect($back);
+});
+
+$router->post('/tenant/events/{id}/album/upload', static function (array $params) use (
+    $tenantAlbumEvent,
+    $driveTokenForAccount,
+    $ensureSessionFolders,
+    $driveFolderForKind
+): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    $back = '/tenant/events/' . (int) ($params['id'] ?? 0) . '/album';
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+
+    // POST besar yang melewati batas server tiba sebagai
+    // $_POST/$_FILES kosong — beri pesan yang jelas, bukan diam.
+    if (($_FILES['files'] ?? null) === null
+        && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0
+        && empty($_POST)) {
+        Flash::error('Unggahan melebihi batas ukuran server. Kecilkan berkas lalu coba lagi.');
+        redirect($back);
+    }
+
+    $extMime = [
+        'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
+        'gif' => 'image/gif', 'mp4' => 'video/mp4', 'mov' => 'video/quicktime',
+    ];
+    $maxBytes = 25 * 1024 * 1024;
+    $kindChoice = is_string($_POST['kind'] ?? null) ? (string) $_POST['kind'] : 'auto';
+    if (!in_array($kindChoice, ['auto', 'final', 'original', 'gif', 'video'], true)) {
+        $kindChoice = 'auto';
+    }
+
+    // Susun ulang berkas unggahan menjadi daftar rata.
+    $files = [];
+    $raw = $_FILES['files'] ?? null;
+    if (is_array($raw) && is_array($raw['name'] ?? null)) {
+        foreach ($raw['name'] as $i => $name) {
+            $files[] = [
+                'name' => (string) $name,
+                'type' => (string) ($raw['type'][$i] ?? ''),
+                'tmp_name' => (string) ($raw['tmp_name'][$i] ?? ''),
+                'error' => (int) ($raw['error'][$i] ?? UPLOAD_ERR_NO_FILE),
+                'size' => (int) ($raw['size'][$i] ?? 0),
+            ];
+        }
+    }
+    $files = array_values(array_filter(
+        $files,
+        static fn (array $f): bool => $f['error'] !== UPLOAD_ERR_NO_FILE
+    ));
+    if ($files === []) {
+        Flash::error('Pilih minimal satu berkas untuk diunggah.');
+        redirect($back);
+    }
+
+    try {
+        [$account, $accessToken] = $driveTokenForAccount($pdo, (int) ($event['drive_account_id'] ?? 0));
+
+        // Sesi tujuan: sesi yang ada atau sesi manual baru.
+        $sessionChoice = is_string($_POST['session_id'] ?? null) ? (string) $_POST['session_id'] : 'new';
+        if ($sessionChoice !== 'new' && is_numeric($sessionChoice)) {
+            $session = Album::sessionWithEvent($pdo, (int) $sessionChoice);
+            if ($session === null || (int) ($session['event_id'] ?? 0) !== (int) $event['id']) {
+                Flash::error('Sesi tujuan tidak ditemukan pada event ini.');
+                redirect($back);
+            }
+        } else {
+            $created = Album::createSession($pdo, (int) $event['id'], null, 'Upload manual', null);
+            $session = Album::sessionWithEvent($pdo, (int) $created['id']);
+            if ($session === null) {
+                Flash::error('Sesi manual gagal dibuat.');
+                redirect($back);
+            }
+        }
+
+        $tenant = Tenant::find($pdo, $tenantId);
+        if ($tenant === null) {
+            Flash::error('Data tenant tidak ditemukan.');
+            redirect($back);
+        }
+        $folders = $ensureSessionFolders($pdo, $tenant, $session, $account, $accessToken);
+    } catch (GoogleDriveException) {
+        Flash::error('Folder penyimpanan gagal disiapkan. Silakan coba lagi.');
+        redirect($back);
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+        redirect($back);
+    } catch (PDOException) {
+        Flash::error('Unggahan gagal disiapkan. Silakan coba lagi.');
+        redirect($back);
+    }
+
+    $okCount = 0;
+    $failures = [];
+    foreach ($files as $file) {
+        $label = $file['name'] !== '' ? $file['name'] : '(tanpa nama)';
+        if ($file['error'] !== UPLOAD_ERR_OK || $file['tmp_name'] === '' || !is_uploaded_file($file['tmp_name'])) {
+            $failures[] = $label . ': unggahan terputus';
+            continue;
+        }
+        if ($file['size'] <= 0 || $file['size'] > $maxBytes) {
+            $failures[] = $label . ': ukuran melebihi 25 MB';
+            continue;
+        }
+        $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        if (!isset($extMime[$ext])) {
+            $failures[] = $label . ': format tidak didukung (pakai JPG/PNG/GIF/MP4/MOV)';
+            continue;
+        }
+        $mime = $extMime[$ext];
+        $detected = function_exists('mime_content_type') ? mime_content_type($file['tmp_name']) : null;
+        if (is_string($detected) && $detected !== '' && $detected !== $mime
+            && !($mime === 'video/quicktime' && $detected === 'video/mp4')) {
+            $failures[] = $label . ': isi berkas tidak cocok dengan ekstensinya';
+            continue;
+        }
+        $kind = $kindChoice;
+        if ($kind === 'auto') {
+            $kind = match ($ext) {
+                'gif' => 'gif',
+                'mp4', 'mov' => 'video',
+                default => 'final',
+            };
+        }
+        try {
+            $uploadUrl = GoogleDrive::initResumableUpload(
+                $accessToken,
+                $driveFolderForKind($folders, $kind),
+                $file['name'],
+                $mime,
+                $file['size']
+            );
+            $handle = fopen($file['tmp_name'], 'rb');
+            if ($handle === false) {
+                $failures[] = $label . ': berkas tidak terbaca';
+                continue;
+            }
+            $ch = curl_init($uploadUrl);
+            curl_setopt_array($ch, [
+                CURLOPT_CUSTOMREQUEST => 'PUT',
+                CURLOPT_INFILE => $handle,
+                CURLOPT_INFILESIZE => $file['size'],
+                CURLOPT_HTTPHEADER => [
+                    'Content-Type: ' . $mime,
+                    'Content-Range: bytes 0-' . ($file['size'] - 1) . '/' . $file['size'],
+                ],
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_TIMEOUT => 180,
+            ]);
+            $rawResp = curl_exec($ch);
+            $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            curl_close($ch);
+            fclose($handle);
+            $fileId = null;
+            if (is_string($rawResp) && ($status === 200 || $status === 201)) {
+                $decoded = json_decode($rawResp, true);
+                $fileId = is_array($decoded) && isset($decoded['id']) ? (string) $decoded['id'] : null;
+            }
+            if ($fileId === null || $fileId === '') {
+                $failures[] = $label . ': Google menolak unggahan';
+                continue;
+            }
+            $metadata = GoogleDrive::fileMetadataOrFail($accessToken, $fileId);
+            GoogleDrive::shareAnyoneReaderOrFail($accessToken, $metadata['id']);
+            Album::registerMedia($pdo, [
+                'session_id' => (int) $session['id'],
+                'event_id' => (int) $event['id'],
+                'drive_account_id' => (int) $account['id'],
+                'drive_file_id' => $metadata['id'],
+                'drive_folder_id' => $driveFolderForKind($folders, $kind),
+                'kind' => $kind,
+                'file_name' => $metadata['name'] ?? $file['name'],
+                'mime_type' => $metadata['mime_type'] ?? $mime,
+                'size_bytes' => $metadata['size_bytes'] ?? $file['size'],
+                'web_link' => $metadata['web_link'],
+                'thumbnail_link' => $metadata['thumbnail_link'],
+            ]);
+            $okCount++;
+        } catch (GoogleDriveException) {
+            $failures[] = $label . ': gagal di Google Drive';
+        } catch (PDOException) {
+            $failures[] = $label . ': gagal dicatat';
+        }
+    }
+
+    if ($okCount > 0) {
+        Flash::success($okCount . ' berkas terunggah ke sesi ' . (string) ($session['code'] ?? '') . ' dan langsung tampil di galeri.');
+    }
+    if ($failures !== []) {
+        Flash::error('Sebagian berkas gagal: ' . implode('; ', array_slice($failures, 0, 4)) . (count($failures) > 4 ? ' …' : ''));
+    }
+    if ($okCount === 0 && $failures === []) {
+        Flash::error('Tidak ada berkas yang terunggah.');
+    }
+    redirect($back);
+});
+
+/* ---------------------------------------------------------------------
  * API — pembayaran tamu (live sejak v0.11.0) & stub berikutnya
  * ------------------------------------------------------------------- */
 $stub = static function (string $note): callable {
