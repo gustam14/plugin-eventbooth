@@ -1,5 +1,11 @@
 # Plugin Eventbooth — Website
 
+- **Galeri memutar GIF .mp4 sebagai video (v0.12.2):** GIF
+  versi DSLRBooth dapat berupa berkas .mp4 berjenis "gif" —
+  halaman sesi kini menentukan putar-sebagai-video dari jenis
+  ATAU ekstensi berkas (lencana putar pada kartu + pemutar
+  video di lightbox), bukan dari jenis saja.
+
 - **Diagnosis charge production + dua alamat notifikasi
   (v0.12.1):** uji production tenant menunjukkan Midtrans
   menerima charge (2xx) tetapi responsnya tanpa data QR —

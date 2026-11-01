@@ -21,10 +21,17 @@ $createdLabel = isset($session['created_at'])
     : '';
 $lbItems = [];
 foreach (($media ?? []) as $item) {
+    $lbName = trim((string) ($item['file_name'] ?? ''));
+    $lbKind = (string) ($item['kind'] ?? 'final');
     $lbItems[] = [
         'id' => (int) ($item['id'] ?? 0),
-        'kind' => (string) ($item['kind'] ?? 'final'),
-        'name' => trim((string) ($item['file_name'] ?? '')),
+        'kind' => $lbKind,
+        'name' => $lbName,
+        // GIF versi DSLRBooth dapat berupa berkas .mp4 (jenis
+        // tetap "gif"); berkas berekstensi video harus diputar
+        // sebagai video, bukan ditampilkan sebagai gambar.
+        'video' => $lbKind === 'video'
+            || (bool) preg_match('/\.(mp4|mov)$/i', $lbName),
     ];
 }
 ?>
@@ -260,6 +267,8 @@ foreach (($media ?? []) as $item) {
                     $hasImage = trim((string) ($item['thumbnail_link'] ?? '')) !== ''
                         || trim((string) ($item['drive_file_id'] ?? '')) !== '';
                     $fileName = trim((string) ($item['file_name'] ?? ''));
+                    $isVideo = $kind === 'video'
+                        || (bool) preg_match('/\.(mp4|mov)$/i', $fileName);
                     ?>
                     <figure class="media-card">
                         <button type="button" class="cover cover-btn" data-open="<?= (int) $idx ?>" aria-label="Lihat <?= e(Album::kindLabel($kind)) ?>">
@@ -271,7 +280,7 @@ foreach (($media ?? []) as $item) {
                                     <?= e(Album::kindLabel($kind)) ?>
                                 </span>
                             <?php endif; ?>
-                            <?php if ($kind === 'video'): ?>
+                            <?php if ($isVideo): ?>
                                 <span class="play-badge"><span>
                                     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
                                 </span></span>
@@ -354,7 +363,7 @@ foreach (($media ?? []) as $item) {
         current = (i + ITEMS.length) % ITEMS.length;
         var item = ITEMS[current];
         stage.innerHTML = '';
-        if (item.kind === 'video') {
+        if (item.video) {
             var video = document.createElement('video');
             video.src = '/media/' + item.id + '?s=video';
             video.controls = true;
