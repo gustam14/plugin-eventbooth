@@ -95,19 +95,26 @@ $env = $cfg['environment'] ?? 'sandbox';
     <p class="hint" style="margin-bottom: 8px;">
         Tamu membayar dengan memindai QRIS di layar kios; aplikasi
         mengecek status lunasnya otomatis ke Midtrans, jadi booth
-        berjalan tanpa operator. Alamat notifikasi untuk transaksi
-        booth adalah:
+        berjalan tanpa operator. Ada <strong>dua alamat notifikasi
+        yang berbeda</strong> — jangan tertukar:
     </p>
-    <p style="margin-bottom: 8px;"><code><?= e($guestNotifyUrl) ?></code></p>
+    <p class="hint" style="margin-bottom: 8px;">
+        1. Notifikasi <strong>transaksi booth</strong> dikirim ke
+        alamat sistem kami:
+        <code><?= e($guestNotifyUrl) ?></code> — ini berjalan
+        <strong>otomatis</strong> lewat mekanisme override khusus
+        per transaksi, tidak ada yang perlu kamu atur.
+    </p>
     <p class="hint">
-        Bila Payment Notification URL di dashboard Midtrans milikmu
-        masih kosong, isi dengan alamat di atas. Bila kolom itu
-        sudah dipakai sistemmu yang lain (misalnya website
-        utamamu), <strong>biarkan saja — jangan diganti</strong>:
-        notifikasi transaksi booth tetap sampai ke sistem kami
-        lewat mekanisme override khusus per transaksi, dan status
-        lunas juga dipastikan aplikasi lewat pengecekan langsung
-        ke Midtrans.
+        2. Kolom <strong>Payment Notification URL di dashboard
+        Midtrans</strong> adalah milik sistem utamamu yang lain
+        (misalnya website utamamu memakai alamat callback-nya
+        sendiri) — <strong>biarkan apa adanya, jangan diganti
+        dengan alamat di atas</strong>, karena alamat itu hanya
+        melayani transaksi booth di sistem kami, sedangkan
+        dashboard-mu melayani sistemmu sendiri. Status lunas
+        booth juga dipastikan aplikasi lewat pengecekan langsung
+        ke Midtrans, jadi tidak bergantung pada kolom itu.
     </p>
 </div>
 

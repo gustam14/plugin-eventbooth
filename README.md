@@ -1,5 +1,16 @@
 # Plugin Eventbooth — Website
 
+- **Diagnosis charge production + dua alamat notifikasi
+  (v0.12.1):** uji production tenant menunjukkan Midtrans
+  menerima charge (2xx) tetapi responsnya tanpa data QR —
+  chargeQris kini melempar status_code/status_message mentah
+  Midtrans dan respons gateway disimpan di raw_webhook baris
+  failed (MidtransException membawa gatewayResponse), jadi
+  riwayat dashboard menampilkan jawaban asli Midtrans. Kartu
+  Cara kerja ditulis ulang menjelaskan DUA alamat notifikasi
+  yang berbeda (alamat booth via override otomatis vs kolom
+  dashboard milik sistem utama tenant) agar tidak tertukar.
+
 - **Berbagi WhatsApp + diagnosis pembayaran (v0.12.0):**
   POST /api/session/share-wa live (dulu stub): aplikasi
   mengirim tautan galeri sesi ke nomor WhatsApp tamu lewat

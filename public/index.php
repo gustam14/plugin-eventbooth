@@ -4371,7 +4371,10 @@ $router->post('/api/payment/create', static function () use ($appDeviceContext, 
                   WHERE order_id = :order_id AND purpose = 'guest'"
             );
             $fail->execute([
-                'raw' => json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_SLASHES),
+                'raw' => json_encode([
+                    'error' => $e->getMessage(),
+                    'midtrans' => $e->gatewayResponse,
+                ], JSON_UNESCAPED_SLASHES),
                 'order_id' => $orderId,
             ]);
         } catch (PDOException) {

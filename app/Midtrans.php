@@ -405,7 +405,16 @@ final class Midtrans
             ? (string) $response['qr_string']
             : null;
         if ($qrString === null && $qrUrl === null) {
-            throw new MidtransException('Midtrans tidak mengembalikan QRIS untuk pesanan ini.');
+            // Midtrans menerima permintaan (HTTP 2xx) tetapi tidak
+            // menyertakan QR — sertakan status mentahnya agar
+            // penyebabnya (kanal belum aktif, batas nominal
+            // acquirer, dll.) terbaca di riwayat dashboard tenant.
+            $code = (string) ($response['status_code'] ?? '?');
+            $message = (string) ($response['status_message'] ?? 'tanpa keterangan');
+            throw new MidtransException(
+                "Midtrans tidak mengembalikan QRIS untuk pesanan ini (status {$code}: {$message}).",
+                $response
+            );
         }
 
         return [
