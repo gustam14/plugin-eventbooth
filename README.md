@@ -1,5 +1,18 @@
 # Plugin Eventbooth — Website
 
+- **Berbagi WhatsApp + diagnosis pembayaran (v0.12.0):**
+  POST /api/session/share-wa live (dulu stub): aplikasi
+  mengirim tautan galeri sesi ke nomor WhatsApp tamu lewat
+  MPWA platform, digerbang fitur plan whatsapp_share. Halaman
+  /tenant/midtrans: URL notifikasi ditampilkan lagi dengan
+  bingkai yang benar (isi bila kosong; JANGAN ganti bila
+  sudah dipakai sistem lain — override per transaksi yang
+  bekerja), petunjuk awalan kunci Sandbox vs Production, dan
+  alasan gagal Midtrans kini tampil pada riwayat pembayaran
+  (dari raw_webhook baris failed). Pembuatan tagihan
+  menyembuhkan tagihan pending basi (>15 menit → expired,
+  buat baru) agar sesi tidak terkunci tagihan yatim.
+
 - **Klarifikasi instruksi Midtrans tenant (v0.11.2):** URL
   endpoint notifikasi dihapus dari kartu "Cara kerja" halaman
   /tenant/midtrans — menampilkannya tetap terbaca sebagai

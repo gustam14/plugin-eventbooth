@@ -75,6 +75,15 @@ $env = $cfg['environment'] ?? 'sandbox';
             <input type="password" id="server_key" name="server_key" maxlength="255" autocomplete="new-password"
                    placeholder="SB-Mid-server-… / Mid-server-…">
         </div>
+        <p class="hint" style="margin-bottom: 14px;">
+            Petunjuk kunci: kunci <strong>Sandbox</strong> selalu
+            diawali <code>SB-</code> (SB-Mid-client-… /
+            SB-Mid-server-…) dan diambil dari dashboard Sandbox;
+            kunci <strong>Production</strong> diawali
+            <code>Mid-</code>. Pastikan pilihan Environment di atas
+            sama dengan asal kuncimu — campuran keduanya adalah
+            penyebab paling umum pembayaran ditolak Midtrans.
+        </p>
         <div class="form-actions">
             <button class="btn btn-primary" type="submit">Simpan Pengaturan</button>
         </div>
@@ -86,13 +95,19 @@ $env = $cfg['environment'] ?? 'sandbox';
     <p class="hint" style="margin-bottom: 8px;">
         Tamu membayar dengan memindai QRIS di layar kios; aplikasi
         mengecek status lunasnya otomatis ke Midtrans, jadi booth
-        berjalan tanpa operator. Kamu <strong>tidak perlu mengubah
-        Payment Notification URL</strong> di dashboard Midtrans
-        milikmu — kolom itu biarkan untuk sistemmu yang lain
-        (misalnya website utamamu). Notifikasi untuk transaksi
-        booth diarahkan khusus per transaksi ke sistem kami lewat
-        mekanisme override Midtrans, jadi tidak ada alamat apa pun
-        yang perlu kamu isi di dashboard Midtrans.
+        berjalan tanpa operator. Alamat notifikasi untuk transaksi
+        booth adalah:
+    </p>
+    <p style="margin-bottom: 8px;"><code><?= e($guestNotifyUrl) ?></code></p>
+    <p class="hint">
+        Bila Payment Notification URL di dashboard Midtrans milikmu
+        masih kosong, isi dengan alamat di atas. Bila kolom itu
+        sudah dipakai sistemmu yang lain (misalnya website
+        utamamu), <strong>biarkan saja — jangan diganti</strong>:
+        notifikasi transaksi booth tetap sampai ke sistem kami
+        lewat mekanisme override khusus per transaksi, dan status
+        lunas juga dipastikan aplikasi lewat pengecekan langsung
+        ke Midtrans.
     </p>
 </div>
 
@@ -112,11 +127,25 @@ $env = $cfg['environment'] ?? 'sandbox';
                 </thead>
                 <tbody>
                 <?php foreach ($orders as $order): ?>
+                    <?php
+                    $failReason = '';
+                    if ((string) $order['status'] === 'failed' && !empty($order['raw_webhook'])) {
+                        $raw = json_decode((string) $order['raw_webhook'], true);
+                        if (is_array($raw) && !empty($raw['error'])) {
+                            $failReason = (string) $raw['error'];
+                        }
+                    }
+                    ?>
                     <tr>
                         <td><?= e((string) $order['order_id']) ?></td>
                         <td><?= e((string) ($order['session_code'] ?? '—')) ?></td>
                         <td>Rp<?= number_format((float) $order['gross_amount'], 0, ',', '.') ?></td>
-                        <td><?= e(Midtrans::statusLabel((string) $order['status'])) ?></td>
+                        <td>
+                            <?= e(Midtrans::statusLabel((string) $order['status'])) ?>
+                            <?php if ($failReason !== ''): ?>
+                                <br><span class="hint" style="color: #B00020;"><?= e($failReason) ?></span>
+                            <?php endif; ?>
+                        </td>
                         <td><?= e((string) $order['created_at']) ?></td>
                     </tr>
                 <?php endforeach; ?>

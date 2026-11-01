@@ -4297,7 +4297,11 @@ $router->post('/api/payment/create', static function () use ($appDeviceContext, 
         }
 
         // Satu tagihan menunggu per sesi: pembuatan ganda (ketuk
-        // dua kali) mengembalikan tagihan yang sama.
+        // dua kali) mengembalikan tagihan yang sama. Tagihan
+        // menunggu yang sudah lebih dari 15 menit dianggap
+        // kedaluwarsa (QRIS tidak berlaku lagi / proses pembuatan
+        // dulu terputus) — ditandai expired agar tagihan baru
+        // dapat dibuat, tidak mengunci sesi selamanya.
         $stmt = $pdo->prepare(
             "SELECT * FROM payments
               WHERE purpose = 'guest' AND session_id = :session AND status = 'pending'
@@ -4306,11 +4310,18 @@ $router->post('/api/payment/create', static function () use ($appDeviceContext, 
         $stmt->execute(['session' => $sessionId]);
         $existing = $stmt->fetch();
         if ($existing !== false) {
-            Json::respond([
-                'status' => 'ok',
-                'payment' => $guestPaymentView($existing, ['existing' => true]),
-            ]);
-            return;
+            $age = time() - (int) strtotime((string) ($existing['created_at'] ?? 'now'));
+            if ($age <= 15 * 60) {
+                Json::respond([
+                    'status' => 'ok',
+                    'payment' => $guestPaymentView($existing, ['existing' => true]),
+                ]);
+                return;
+            }
+            $expire = $pdo->prepare(
+                "UPDATE payments SET status = 'expired', expired_at = NOW() WHERE id = :id"
+            );
+            $expire->execute(['id' => (int) $existing['id']]);
         }
 
         $cfg = Midtrans::tenantConfig($pdo, $tenantId);
@@ -4488,7 +4499,60 @@ $router->post('/api/payment/notification', static function () use ($readJsonBody
 // TODO(M5): Registrasi metadata sesi selesai upload & berbagi
 // WhatsApp lewat n8n/MPWA (blueprint §3 langkah 5 & §5C).
 $router->post('/api/session/register', $stub('Registrasi metadata sesi — Milestone 5.'));
-$router->post('/api/session/share-wa', $stub('Kirim tautan album via WhatsApp — Milestone 5.'));
+/**
+ * Kirim tautan galeri sesi ke WhatsApp tamu (fitur plan
+ * whatsapp_share) lewat gateway MPWA platform. Dipanggil
+ * aplikasi dari layar selesai kios setelah tamu mengisi
+ * nomornya. Pengiriman tercatat sebagai upaya terbaik gateway
+ * platform — nomor pengirim & API key diatur Super Admin di
+ * /admin/payments, sama seperti notifikasi lunas lisensi.
+ */
+$router->post('/api/session/share-wa', static function () use ($appDeviceContext, $readJsonBody): void {
+    [$pdo, $device, $license, $tenant] = $appDeviceContext();
+    $tenantId = (int) $tenant['id'];
+    $body = $readJsonBody();
+
+    $entitlements = License::entitlements($license);
+    if (empty($entitlements['features']['whatsapp_share'])) {
+        Json::error('Fitur berbagi via WhatsApp tidak termasuk dalam plan lisensimu.', 403, 'feature_not_included');
+    }
+
+    $sessionId = isset($body['session_id']) && is_numeric($body['session_id']) ? (int) $body['session_id'] : 0;
+    $number = Whatsapp::normalize(isset($body['whatsapp']) ? (string) $body['whatsapp'] : null);
+    if ($sessionId <= 0) {
+        Json::error('session_id wajib diisi.', 422, 'invalid_request');
+    }
+    if ($number === null) {
+        Json::error('Nomor WhatsApp tidak sah. Gunakan format 08… atau 628…', 422, 'invalid_whatsapp');
+    }
+
+    try {
+        $session = Album::sessionWithEvent($pdo, $sessionId);
+        if ($session === null || (int) $session['event_tenant_id'] !== $tenantId) {
+            Json::error('Sesi tidak ditemukan.', 404, 'not_found');
+        }
+    } catch (PDOException) {
+        Json::error('Layanan belum siap. Silakan coba lagi.', 503, 'server_error');
+        return;
+    }
+
+    // URL sesi kanonis — sama seperti session_url pada pembuatan
+    // sesi (POST /api/app/sessions).
+    $sessionUrl = Config::appUrl() . '/s/' . (string) $session['code'];
+    $vendor = (string) ($tenant['vendor_name'] ?? 'Photobooth');
+    $message = "Halo! Foto sesi {$session['code']} di event {$session['event_name']} sudah dapat dilihat & diunduh di sini:\n"
+        . $sessionUrl . "\n\nTerima kasih sudah berfoto bersama {$vendor}!";
+
+    if (!Mpwa::sendText($pdo, $number, $message)) {
+        Json::error(
+            'Pesan WhatsApp belum terkirim (gateway platform belum diatur atau sedang gangguan). Tautan tetap dapat dibagikan lewat QR di layar.',
+            502,
+            'whatsapp_send_failed'
+        );
+    }
+
+    Json::respond(['status' => 'ok', 'sent' => true, 'session_url' => $sessionUrl]);
+});
 
 /* ---------------------------------------------------------------------
  * Dispatch
