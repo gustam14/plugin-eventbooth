@@ -243,9 +243,14 @@ $serveMedia = static function (array $params, bool $download): void {
         return;
     }
 
+    // Berkas berekstensi video diputar sebagai video walau
+    // jenisnya "gif" (GIF DSLRBooth berupa .mp4) — tanpa ini
+    // pemutar menerima URL gambar dan berhenti di layar hitam.
+    $isVideoFile = (string) ($media['kind'] ?? '') === 'video'
+        || (bool) preg_match('/\.(mp4|mov)$/i', (string) ($media['file_name'] ?? ''));
     if ($download) {
         $target = Album::downloadUrl($media);
-    } elseif ((string) ($media['kind'] ?? '') === 'video' && ($_GET['s'] ?? '') === 'video') {
+    } elseif ($isVideoFile && ($_GET['s'] ?? '') === 'video') {
         $target = Album::downloadUrl($media);
     } else {
         $target = Album::sizedImageUrl($media, (($_GET['s'] ?? '') === 'full') ? 1920 : 1000);

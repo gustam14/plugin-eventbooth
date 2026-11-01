@@ -291,10 +291,10 @@ foreach (($media ?? []) as $item) {
                             <?php if ($fileName !== ''): ?>
                                 <span class="file" style="display: block;"><?= e($fileName) ?></span>
                             <?php endif; ?>
-                            <span class="actions">
-                                <button type="button" data-open="<?= (int) $idx ?>">Lihat</button>
-                                <a class="download" href="/media/<?= $mediaId ?>/download">Unduh</a>
-                            </span>
+                            <?php // Tanpa tombol Lihat/Unduh pada kartu
+                                  // (permintaan pemilik): kartu diklik untuk
+                                  // membuka penampil, dan unduhan hanya dari
+                                  // dalam penampil — tamu melihat dulu. ?>
                         </span>
                     </figure>
                 <?php endforeach; ?>

@@ -1,5 +1,13 @@
 # Plugin Eventbooth — Website
 
+- **Kartu galeri ramping + putar GIF diperbaiki (v0.12.3):**
+  tombol Lihat/Unduh dihapus dari kartu media halaman sesi
+  (klik kartu membuka penampil; unduh hanya dari dalam
+  penampil). Rute /media kini melayani ?s=video juga untuk
+  berkas .mp4/.mov berjenis gif — sebelumnya syarat jenis
+  "video" membuat GIF .mp4 menerima URL gambar pada pemutar
+  (layar hitam 0:00, terbukti pada sesi uji 9EYR9ETC).
+
 - **Galeri memutar GIF .mp4 sebagai video (v0.12.2):** GIF
   versi DSLRBooth dapat berupa berkas .mp4 berjenis "gif" —
   halaman sesi kini menentukan putar-sebagai-video dari jenis
