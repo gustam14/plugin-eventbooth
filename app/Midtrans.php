@@ -381,7 +381,17 @@ final class Midtrans
             'POST',
             self::coreBase((string) $config['environment']) . '/v2/charge',
             $payload,
-            $serverKey
+            $serverKey,
+            [
+                // Akun Midtrans tenant bisa dipakai bersama sistem
+                // tenant yang lain (URL notifikasi dashboard hanya
+                // menampung SATU alamat). Header ini mengganti URL
+                // notifikasi KHUSUS transaksi ini ke endpoint
+                // plugin, jadi dashboard tenant tidak perlu diubah
+                // sama sekali (pola yang sama dengan checkout
+                // lisensi platform, v0.8.1).
+                'X-Override-Notification: ' . self::guestNotifyUrl(),
+            ]
         );
 
         $qrUrl = null;

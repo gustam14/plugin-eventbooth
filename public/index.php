@@ -4438,36 +4438,45 @@ $router->get('/api/payment/status', static function () use ($appDeviceContext, $
 });
 
 $router->post('/api/payment/notification', static function () use ($readJsonBody, $guestPaymentFind, $guestPaymentApply): void {
+    // Endpoint ini SELALU menjawab 200 untuk notifikasi yang
+    // tidak dapat diproses, dan hanya MENERAPKAN notifikasi yang
+    // order-nya dikenal + tanda tangannya terverifikasi. Alasan:
+    // (1) tombol "Test notification URL" di dashboard Midtrans
+    // mengirim order contoh yang tidak ada di tabel kita — jawaban
+    // non-200 membuat Midtrans melaporkan "Test failed"; (2) akun
+    // Midtrans tenant dapat dipakai bersama sistem tenant yang
+    // lain, jadi notifikasi milik transaksi asing sah-sah saja
+    // mampir ke sini dan harus diakui tanpa diterapkan. Status
+    // lunas utama tetap dipastikan lewat /api/payment/status.
     $payload = $readJsonBody();
     $orderId = isset($payload['order_id']) ? trim((string) $payload['order_id']) : '';
-    if ($orderId === '') {
-        Json::error('Payload notifikasi tidak lengkap.', 400, 'invalid_payload');
-    }
-
     $pdo = Database::pdo();
-    if ($pdo === null) {
-        Json::error('Layanan belum siap.', 503, 'server_error');
+    if ($orderId === '' || $pdo === null) {
+        Json::respond(['status' => 'ok', 'applied' => false]);
+        return;
     }
 
     try {
         $payment = $guestPaymentFind($pdo, $orderId, null);
         if ($payment === null) {
-            Json::error('Pembayaran tidak ditemukan.', 404, 'not_found');
+            Json::respond(['status' => 'ok', 'applied' => false]);
+            return;
         }
         $cfg = Midtrans::tenantConfig($pdo, (int) $payment['tenant_id']);
-        if ($cfg === null || ($cfg['server_key'] ?? null) === null) {
-            Json::error('Konfigurasi tenant tidak ditemukan.', 503, 'payment_not_configured');
-        }
-        if (!Midtrans::verifySignature($payload, (string) $cfg['server_key'])) {
-            Json::error('Tanda tangan notifikasi tidak sah.', 403, 'invalid_signature');
+        if ($cfg === null
+            || ($cfg['server_key'] ?? null) === null
+            || !Midtrans::verifySignature($payload, (string) $cfg['server_key'])
+        ) {
+            Json::respond(['status' => 'ok', 'applied' => false]);
+            return;
         }
         $guestPaymentApply($pdo, $payment, $payload);
     } catch (PDOException) {
-        Json::error('Notifikasi gagal diproses.', 503, 'server_error');
+        Json::respond(['status' => 'ok', 'applied' => false]);
         return;
     }
 
-    Json::respond(['status' => 'ok']);
+    Json::respond(['status' => 'ok', 'applied' => true]);
 });
 
 // CATATAN(M5b): Endpoint operasi Drive (/api/drive/session-folders,

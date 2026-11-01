@@ -1,5 +1,15 @@
 # Plugin Eventbooth — Website
 
+- **Perbaikan notifikasi tamu (v0.11.1):** tombol "Test
+  notification URL" Midtrans gagal karena endpoint menjawab 404
+  untuk order contoh yang tidak dikenal. Kini endpoint selalu
+  200 dan hanya menerapkan notifikasi yang dikenal +
+  terverifikasi; charge QRIS menyertakan header
+  X-Override-Notification (pola v0.8.1) sehingga notifikasi
+  transaksi booth tiba di plugin TANPA tenant mengubah URL
+  notifikasi dashboard Midtrans-nya — instruksi di halaman
+  /tenant/midtrans diperbaiki mengikuti ini.
+
 - **Pembayaran tamu QRIS via Midtrans tenant (v0.11.0):**
   keputusan pemilik — uang tamu masuk langsung ke Midtrans
   MASING-MASING tenant. Tenant mengatur kuncinya di menu

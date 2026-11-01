@@ -82,14 +82,16 @@ $env = $cfg['environment'] ?? 'sandbox';
 </div>
 
 <div class="panel-box">
-    <h2 style="font-size: 16.5px; font-weight: 700; margin-bottom: 10px;">Cara kerja &amp; URL notifikasi</h2>
+    <h2 style="font-size: 16.5px; font-weight: 700; margin-bottom: 10px;">Cara kerja — tanpa mengubah dashboard Midtrans</h2>
     <p class="hint" style="margin-bottom: 8px;">
         Tamu membayar dengan memindai QRIS di layar kios; aplikasi
         mengecek status lunasnya otomatis ke Midtrans, jadi booth
-        berjalan tanpa operator. Agar status juga terbarui saat
-        aplikasi tertutup, kamu boleh mengisi Payment Notification
-        URL di dashboard Midtrans milikmu (Settings &gt; Payment
-        Notification) dengan alamat ini:
+        berjalan tanpa operator. Kamu <strong>tidak perlu mengubah
+        Payment Notification URL</strong> di dashboard Midtrans
+        milikmu — kolom itu biarkan untuk sistemmu yang lain
+        (misalnya website utamamu). Notifikasi untuk transaksi
+        booth diarahkan khusus per transaksi ke sistem kami lewat
+        mekanisme override Midtrans, dan alamat tujuannya adalah:
     </p>
     <p><code><?= e($guestNotifyUrl) ?></code></p>
 </div>
