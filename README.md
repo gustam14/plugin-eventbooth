@@ -1,5 +1,15 @@
 # Plugin Eventbooth — Website
 
+- **Pilihan massal + hapus event (v0.14.1):** halaman Kelola
+  Album kini punya centang pada tiap berkas dan sesi (+
+  "pilih semua berkas" per sesi) dengan bilah aksi lengket
+  "Hapus yang Dipilih" (POST …/album/bulk-delete; per item
+  tahan galat, sesi hanya dibuang bila berkasnya bersih).
+  Zona Berbahaya menambah "Hapus Event Ini" (…/album/
+  delete-event): semua berkas dibuang dari Drive dulu, lalu
+  baris event dihapus — sesi/media/paket tercascade skema,
+  riwayat pembayaran tetap tersimpan (tautan dikosongkan).
+
 - **Kelola Album tenant (v0.14.0):** halaman dashboard baru
   /tenant/events/{id}/album (tautan "Kelola Album" di daftar
   Event): daftar sesi + media event, HAPUS per berkas / per

@@ -10,7 +10,7 @@ final class Config
     /** Versi aplikasi; naikkan setiap milestone. */
     public static function appVersion(): string
     {
-        return '0.14.0';
+        return '0.14.1';
     }
 
     /** Nomor milestone blueprint yang sedang berjalan (6 = Checkout Lisensi Midtrans). */

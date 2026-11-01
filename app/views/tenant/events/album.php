@@ -1,7 +1,8 @@
 <?php
 /**
- * Kelola Album event (v0.14.0): tenant menghapus media/sesi dan
- * mengunggah foto/GIF/boomerang manual ke galeri event.
+ * Kelola Album event (v0.14.0; pilihan massal + hapus event
+ * v0.14.1): tenant menghapus media/sesi/event dan mengunggah
+ * foto/GIF/boomerang manual ke galeri event.
  *
  * @var string $appName
  * @var string $appUrl
@@ -21,7 +22,10 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
 <style>
     .album-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px; margin-top: 14px; }
     .album-media-card { border: 1px solid var(--line, #262B33); border-radius: 10px; overflow: hidden; background: rgba(255,255,255,.02); }
+    .album-media-card .thumb { position: relative; }
     .album-media-card img { width: 100%; height: 104px; object-fit: cover; display: block; background: #11141A; }
+    .album-media-card .pick { position: absolute; top: 6px; left: 6px; background: rgba(5,6,8,.72); border-radius: 7px; padding: 3px 6px; display: flex; align-items: center; }
+    .album-media-card .pick input { width: 18px; height: 18px; accent-color: #C9A24B; cursor: pointer; margin: 0; }
     .album-media-card .meta { padding: 8px 10px 10px; }
     .album-media-card .kind { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--gold, #C9A24B); }
     .album-media-card .fname { font-size: 12px; color: var(--muted, #9AA3AF); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 2px 0 8px; }
@@ -29,6 +33,9 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
     .album-session-head .info { color: var(--muted, #9AA3AF); font-size: 13px; }
     .album-actions { display: flex; gap: 8px; align-items: center; }
     .album-actions form { display: inline; }
+    .album-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted, #9AA3AF); cursor: pointer; }
+    .album-pick input { width: 17px; height: 17px; accent-color: #C9A24B; cursor: pointer; margin: 0; }
+    .bulk-bar { position: sticky; bottom: 12px; z-index: 6; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
 </style>
 
 <p class="sub">
@@ -87,6 +94,22 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
     </div>
 <?php endif; ?>
 
+<?php if ($sessionsData !== []): ?>
+    <form class="panel-box bulk-bar" id="bulkDeleteForm" method="post"
+          action="/tenant/events/<?= $eventId ?>/album/bulk-delete"
+          onsubmit="return ebConfirmBulk();">
+        <?= Auth::csrfField() ?>
+        <span class="hint" style="margin: 0;">
+            Centang berkas atau sesi di bawah, lalu hapus sekaligus.
+            <strong id="bulkCount" style="color: var(--ink, #EDEFF3);">0 terpilih</strong>
+        </span>
+        <span class="album-actions">
+            <button class="btn btn-small" type="button" onclick="ebClearSelection();">Batalkan Pilihan</button>
+            <button class="btn btn-danger btn-small" id="bulkSubmit" type="submit" disabled>Hapus yang Dipilih</button>
+        </span>
+    </form>
+<?php endif; ?>
+
 <?php foreach ($sessionsData as $row): ?>
     <?php
     $s = $row['session'];
@@ -99,6 +122,10 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
     <div class="panel-box">
         <div class="album-session-head">
             <div>
+                <label class="album-pick" title="Pilih sesi ini untuk dihapus massal">
+                    <input type="checkbox" form="bulkDeleteForm" name="session_ids[]" value="<?= $sessionId ?>"
+                           class="session-check" onchange="ebCount();">
+                </label>
                 <strong style="font-size: 16px;">Sesi <?= e($code) ?></strong>
                 <div class="info">
                     <?= e($createdLabel) ?><?= $timeLabel !== '' ? ' · ' . e($timeLabel) : '' ?>
@@ -107,6 +134,11 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
                 </div>
             </div>
             <div class="album-actions">
+                <label class="album-pick">
+                    <input type="checkbox" class="select-all-session" data-session="<?= $sessionId ?>"
+                           onchange="ebToggleSessionAll(this);">
+                    Pilih semua berkas
+                </label>
                 <a class="btn btn-small" href="<?= e(($appUrl ?? '') . '/s/' . $code) ?>" target="_blank" rel="noopener">Lihat Publik</a>
                 <form method="post" action="/tenant/events/<?= $eventId ?>/album/sessions/<?= $sessionId ?>/delete"
                       onsubmit="return confirm('Hapus sesi <?= e($code) ?> beserta seluruh berkasnya? Tindakan ini tidak dapat dibatalkan.');">
@@ -127,7 +159,14 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
                     $fname = (string) ($m['file_name'] ?? '');
                     ?>
                     <div class="album-media-card">
-                        <img src="/media/<?= $mediaId ?>" alt="<?= e(Album::kindLabel($kind)) ?>" loading="lazy">
+                        <div class="thumb">
+                            <img src="/media/<?= $mediaId ?>" alt="<?= e(Album::kindLabel($kind)) ?>" loading="lazy">
+                            <span class="pick">
+                                <input type="checkbox" form="bulkDeleteForm" name="media_ids[]" value="<?= $mediaId ?>"
+                                       class="media-check" data-session="<?= $sessionId ?>" onchange="ebCount();"
+                                       aria-label="Pilih berkas <?= e($fname) ?>">
+                            </span>
+                        </div>
                         <div class="meta">
                             <div class="kind"><?= e(Album::kindLabel($kind)) ?></div>
                             <div class="fname" title="<?= e($fname) ?>"><?= e($fname) ?></div>
@@ -151,15 +190,53 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
     <div class="panel-box" style="border-color: var(--err-line, #5A2B2B);">
         <h3 style="margin-top: 0;">Zona Berbahaya</h3>
         <p class="hint" style="margin-bottom: 12px;">
-            Kosongkan seluruh album event ini: semua sesi dan berkasnya dihapus permanen
+            <strong>Kosongkan album:</strong> semua sesi dan berkas event ini dihapus permanen
             dari galeri dan penyimpanan. Event-nya sendiri tetap ada.
         </p>
         <form method="post" action="/tenant/events/<?= $eventId ?>/album/wipe"
-              onsubmit="return confirm('Kosongkan SELURUH album event ini? Semua sesi dan berkas akan terhapus permanen.');">
+              onsubmit="return confirm('Kosongkan SELURUH album event ini? Semua sesi dan berkas akan terhapus permanen.');" style="margin-bottom: 18px;">
             <?= Auth::csrfField() ?>
             <button class="btn btn-danger" type="submit">Hapus Seluruh Isi Album</button>
         </form>
+        <p class="hint" style="margin-bottom: 12px;">
+            <strong>Hapus event:</strong> event ini dihapus permanen beserta seluruh sesi,
+            berkas di penyimpanan, paket sesi, dan pengaturannya. Riwayat pembayaran tamu
+            tetap tersimpan sebagai catatan. Tindakan ini tidak dapat dibatalkan.
+        </p>
+        <form method="post" action="/tenant/events/<?= $eventId ?>/album/delete-event"
+              onsubmit="return confirm('Hapus EVENT <?= e((string) ($event['name'] ?? '')) ?> secara permanen beserta semua sesi, berkas, dan paketnya?');">
+            <?= Auth::csrfField() ?>
+            <button class="btn btn-danger" type="submit">Hapus Event Ini</button>
+        </form>
     </div>
 <?php endif; ?>
+
+<script>
+function ebSelectedCount() {
+    return document.querySelectorAll('.media-check:checked, .session-check:checked').length;
+}
+function ebCount() {
+    var n = ebSelectedCount();
+    var label = document.getElementById('bulkCount');
+    if (label) { label.textContent = n + ' terpilih'; }
+    var submit = document.getElementById('bulkSubmit');
+    if (submit) { submit.disabled = n === 0; }
+}
+function ebToggleSessionAll(box) {
+    document.querySelectorAll('.media-check[data-session="' + box.getAttribute('data-session') + '"]')
+        .forEach(function (cb) { cb.checked = box.checked; });
+    ebCount();
+}
+function ebClearSelection() {
+    document.querySelectorAll('.media-check:checked, .session-check:checked, .select-all-session:checked')
+        .forEach(function (cb) { cb.checked = false; });
+    ebCount();
+}
+function ebConfirmBulk() {
+    var n = ebSelectedCount();
+    if (n === 0) { return false; }
+    return confirm('Hapus ' + n + ' item terpilih beserta file-nya di penyimpanan? Tindakan ini tidak dapat dibatalkan.');
+}
+</script>
 
 <?php require BASE_PATH . '/app/views/partials/dashboard_bottom.php'; ?>

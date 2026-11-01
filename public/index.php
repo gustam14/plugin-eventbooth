@@ -4401,6 +4401,150 @@ $router->post('/tenant/events/{id}/album/wipe', static function (array $params) 
     redirect($back);
 });
 
+/**
+ * Hapus massal terpilih (v0.14.1): tenant mencentang beberapa
+ * berkas dan/atau sesi lalu menghapusnya sekaligus. Setiap item
+ * diproses satu per satu (file Drive dulu, lalu barisnya);
+ * kegagalan satu item tidak membatalkan item lain — hasilnya
+ * dilaporkan ringkas. Sesi yang ikut terhapus membuat centang
+ * berkas di dalamnya tidak diproses ulang.
+ */
+$router->post('/tenant/events/{id}/album/bulk-delete', static function (array $params) use ($tenantAlbumEvent, $deleteOneMedia): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    $back = '/tenant/events/' . (int) ($params['id'] ?? 0) . '/album';
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    $eventId = (int) $event['id'];
+
+    $pickIds = static function (string $key): array {
+        $out = [];
+        foreach ((array) ($_POST[$key] ?? []) as $value) {
+            if (is_numeric($value) && (int) $value > 0) {
+                $out[(int) $value] = true;
+            }
+        }
+
+        return array_keys($out);
+    };
+    $mediaIds = $pickIds('media_ids');
+    $sessionIds = $pickIds('session_ids');
+    if ($mediaIds === [] && $sessionIds === []) {
+        Flash::error('Centang dulu berkas atau sesi yang ingin dihapus.');
+        redirect($back);
+    }
+
+    $deletedSessions = 0;
+    $deletedFiles = 0;
+    $failures = 0;
+    $goneSessions = [];
+    try {
+        foreach ($sessionIds as $sessionId) {
+            $session = Album::sessionWithEvent($pdo, $sessionId);
+            if ($session === null || (int) ($session['event_id'] ?? 0) !== $eventId) {
+                continue;
+            }
+            foreach (Album::mediaForSession($pdo, $sessionId) as $item) {
+                try {
+                    $deleteOneMedia($pdo, $event, $item);
+                    $deletedFiles++;
+                } catch (GoogleDriveException | RuntimeException) {
+                    $failures++;
+                }
+            }
+            // Sesi hanya dibuang bila seluruh berkasnya sudah
+            // terhapus — sisanya tetap utuh dan bisa dicoba lagi.
+            if (Album::mediaForSession($pdo, $sessionId) === []) {
+                $del = $pdo->prepare('DELETE FROM sessions WHERE id = :id');
+                $del->execute(['id' => $sessionId]);
+                $deletedSessions++;
+                $goneSessions[$sessionId] = true;
+            }
+        }
+        foreach ($mediaIds as $mediaId) {
+            $media = Album::mediaById($pdo, $mediaId);
+            if ($media === null || (int) ($media['event_id'] ?? 0) !== $eventId) {
+                continue;
+            }
+            if (isset($goneSessions[(int) ($media['session_id'] ?? 0)])) {
+                continue;
+            }
+            try {
+                $deleteOneMedia($pdo, $event, $media);
+                $deletedFiles++;
+            } catch (GoogleDriveException | RuntimeException) {
+                $failures++;
+            }
+        }
+    } catch (PDOException) {
+        Flash::error('Penghapusan massal gagal di tengah jalan. Sebagian mungkin sudah terhapus; muat ulang halaman untuk melihat keadaan terbaru.');
+        redirect($back);
+    }
+
+    if ($deletedSessions > 0 || $deletedFiles > 0) {
+        Flash::success("Terhapus: {$deletedSessions} sesi dan {$deletedFiles} berkas (termasuk file di penyimpanan).");
+    }
+    if ($failures > 0) {
+        Flash::error("{$failures} berkas gagal dihapus dari penyimpanan dan masih tampil di galeri — coba lagi nanti.");
+    }
+    if ($deletedSessions === 0 && $deletedFiles === 0 && $failures === 0) {
+        Flash::error('Tidak ada item yang terhapus — pilihan tidak ditemukan pada event ini.');
+    }
+    redirect($back);
+});
+
+/**
+ * Hapus EVENT secara permanen dari Kelola Album (v0.14.1):
+ * seluruh berkas dibuang dari Drive lebih dulu, lalu baris
+ * event dihapus — sesi, media, dan paketnya ikut terhapus
+ * oleh cascade skema; riwayat pembayaran tetap tersimpan
+ * sebagai catatan (tautannya dikosongkan oleh skema).
+ */
+$router->post('/tenant/events/{id}/album/delete-event', static function (array $params) use ($tenantAlbumEvent, $deleteOneMedia): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    $back = '/tenant/events/' . (int) ($params['id'] ?? 0) . '/album';
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    try {
+        $stmt = $pdo->prepare('SELECT * FROM media_files WHERE event_id = :event');
+        $stmt->execute(['event' => (int) $event['id']]);
+        $allMedia = $stmt->fetchAll();
+        foreach ($allMedia as $item) {
+            $deleteOneMedia($pdo, $event, $item);
+        }
+        $del = $pdo->prepare('DELETE FROM events WHERE id = :id AND tenant_id = :tenant');
+        $del->execute(['id' => (int) $event['id'], 'tenant' => $tenantId]);
+        Flash::success('Event "' . (string) ($event['name'] ?? '') . '" terhapus permanen beserta ' . count($allMedia) . ' berkasnya di penyimpanan.');
+    } catch (GoogleDriveException $e) {
+        Flash::error('Penghapusan event dibatalkan: ' . $e->getMessage() . ' Sebagian berkas mungkin sudah terhapus; event-nya sendiri masih ada.');
+        redirect($back);
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+        redirect($back);
+    } catch (PDOException) {
+        Flash::error('Event gagal dihapus. Silakan coba lagi.');
+        redirect($back);
+    }
+    redirect('/tenant/events');
+});
+
 $router->post('/tenant/events/{id}/album/upload', static function (array $params) use (
     $tenantAlbumEvent,
     $driveTokenForAccount,
