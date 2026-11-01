@@ -1,5 +1,16 @@
 # Plugin Eventbooth — Website
 
+- **Streaming video dari server sendiri (v0.13.0, pilihan
+  pemilik "ala fotoshare"):** kelas MediaStream meneruskan
+  byte video/GIF dari Drive API (alt=media, token akun pusat
+  pemilik media) lewat /media/{id}?s=video — inline,
+  Content-Type video, Range diteruskan (206). Foto tetap 302
+  ke CDN Google; hanya byte VIDEO yang lewat hosting (berkas
+  kecil). Penampil memakai pemutar bawaan: GIF berputar
+  otomatis senyap berulang, video berkontrol; galat aliran
+  mundur ke pemutar pratinjau Drive. Mundur total ke
+  pengalihan export=view bila token/akun tak siap.
+
 - **Pemutaran video lewat pemutar pratinjau Drive (v0.12.5):**
   walau rantai export=view terbukti sehat di sisi server
   (H.264 Constrained Baseline yuv420p, moov di depan, 206

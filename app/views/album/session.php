@@ -369,24 +369,35 @@ foreach (($media ?? []) as $item) {
         current = (i + ITEMS.length) % ITEMS.length;
         var item = ITEMS[current];
         stage.innerHTML = '';
-        if (item.video && item.drive) {
-            // Pemutar pratinjau Drive: memutar langsung di dalam
-            // penampil (Google yang mengalirkan & menyesuaikan
-            // formatnya). Rantai uc?export=… terbukti berhenti
-            // di layar hitam pada peramban desktop & Android
-            // walau berkasnya H.264 standar dan headernya benar.
-            var frame = document.createElement('iframe');
-            frame.src = 'https://drive.google.com/file/d/' + item.drive + '/preview';
-            frame.className = 'lb-frame';
-            frame.allow = 'autoplay; fullscreen; encrypted-media';
-            frame.allowFullscreen = true;
-            stage.appendChild(frame);
-        } else if (item.video) {
+        if (item.video) {
+            // Pemutar bawaan dengan aliran dari server sendiri
+            // (gaya fotoshare): berkas GIF berputar otomatis,
+            // senyap, dan berulang seperti GIF sungguhan; video
+            // biasa berkontrol dan ikut berputar otomatis.
+            // Bila aliran gagal di peramban ini, mundur ke
+            // pemutar pratinjau Drive agar tamu tetap bisa
+            // menonton.
             var video = document.createElement('video');
             video.src = '/media/' + item.id + '?s=video';
-            video.controls = true;
             video.autoplay = true;
             video.playsInline = true;
+            if (item.kind === 'gif') {
+                video.muted = true;
+                video.loop = true;
+            } else {
+                video.controls = true;
+            }
+            if (item.drive) {
+                video.addEventListener('error', function () {
+                    var frame = document.createElement('iframe');
+                    frame.src = 'https://drive.google.com/file/d/' + item.drive + '/preview';
+                    frame.className = 'lb-frame';
+                    frame.allow = 'autoplay; fullscreen; encrypted-media';
+                    frame.allowFullscreen = true;
+                    stage.innerHTML = '';
+                    stage.appendChild(frame);
+                }, { once: true });
+            }
             stage.appendChild(video);
         } else {
             var img = document.createElement('img');

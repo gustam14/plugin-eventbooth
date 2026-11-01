@@ -249,12 +249,28 @@ $serveMedia = static function (array $params, bool $download): void {
     $isVideoFile = (string) ($media['kind'] ?? '') === 'video'
         || (bool) preg_match('/\.(mp4|mov)$/i', (string) ($media['file_name'] ?? ''));
     $forPlayer = !$download && $isVideoFile && ($_GET['s'] ?? '') === 'video';
+    if ($forPlayer) {
+        // Putar ala fotoshare (v0.13.0, pilihan pemilik): server
+        // mengalirkan byte videonya sendiri dari Drive. Bila
+        // aliran tidak dapat disiapkan (token/akun bermasalah),
+        // mundur ke pengalihan inline agar galeri tidak mati.
+        if ($pdo !== null && MediaStream::tryServe($pdo, $media)) {
+            return;
+        }
+        $target = Album::streamUrl($media);
+        if ($target === null) {
+            View::render('errors/404', [
+                'appName' => Config::appName(),
+                'appUrl' => Config::appUrl(),
+            ], 404);
+            return;
+        }
+        header('Cache-Control: no-store');
+        header('Location: ' . $target, true, 302);
+        return;
+    }
     if ($download) {
         $target = Album::downloadUrl($media);
-    } elseif ($forPlayer) {
-        // Pemutar memakai aliran inline (export=view); URL
-        // unduhan (attachment) ditolak elemen <video>.
-        $target = Album::streamUrl($media);
     } else {
         $target = Album::sizedImageUrl($media, (($_GET['s'] ?? '') === 'full') ? 1920 : 1000);
     }
@@ -266,10 +282,8 @@ $serveMedia = static function (array $params, bool $download): void {
         return;
     }
 
-    // Pengalihan gambar boleh dicache; pengalihan video tidak —
-    // peramban yang menyimpan pengalihan lama (?s=video ke URL
-    // unduhan) akan terus gagal memutar sampai cache-nya basi.
-    header('Cache-Control: ' . ($forPlayer ? 'no-store' : 'public, max-age=3600'));
+    // Pengalihan gambar/unduhan boleh dicache peramban.
+    header('Cache-Control: public, max-age=3600');
     header('Location: ' . $target, true, 302);
 };
 
