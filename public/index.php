@@ -98,17 +98,12 @@ $router->get('/terms', static function (): void {
  * seperti halaman lain. Album password (album_password_hash)
  * belum ditegakkan di milestone ini.
  * ------------------------------------------------------------------- */
-$router->get('/e/{slug}', static function (array $params): void {
-    $pdo = Database::pdo();
-    $event = null;
-    if ($pdo !== null) {
-        try {
-            $event = Album::eventBySlug($pdo, (string) ($params['slug'] ?? ''));
-        } catch (PDOException) {
-            $event = null;
-        }
-    }
-
+/**
+ * Render album event (daftar kartu sesi). Dipakai dua bentuk URL:
+ * lama /e/{slug} dan galeri /gallery/{slug-tenant}/{slug-event};
+ * $albumBase adalah awalan URL halaman ini untuk tautan paginasi.
+ */
+$renderEventAlbum = static function (?array $event, string $albumBase): void {
     if ($event === null) {
         View::render('errors/404', [
             'appName' => Config::appName(),
@@ -117,20 +112,25 @@ $router->get('/e/{slug}', static function (array $params): void {
         return;
     }
 
+    $pdo = Database::pdo();
     $perPage = Album::PER_PAGE;
     $totalSessions = 0;
     $sessions = [];
-    try {
-        $totalSessions = Album::countSessions($pdo, (int) $event['id']);
-        $totalPages = max(1, (int) ceil($totalSessions / $perPage));
-        $page = isset($_GET['page']) ? (int) $_GET['page'] : 1;
-        $page = max(1, min($page, $totalPages));
-        $sessions = Album::sessionsPage($pdo, (int) $event['id'], $page, $perPage);
-    } catch (PDOException) {
-        // Album tetap tampil dengan keadaan kosong.
-        $totalPages = 1;
-        $page = 1;
-        $sessions = [];
+    $totalPages = 1;
+    $page = 1;
+    if ($pdo !== null) {
+        try {
+            $totalSessions = Album::countSessions($pdo, (int) $event['id']);
+            $totalPages = max(1, (int) ceil($totalSessions / $perPage));
+            $page = isset($_GET['page']) ? (int) $_GET['page'] : 1;
+            $page = max(1, min($page, $totalPages));
+            $sessions = Album::sessionsPage($pdo, (int) $event['id'], $page, $perPage);
+        } catch (PDOException) {
+            // Album tetap tampil dengan keadaan kosong.
+            $totalPages = 1;
+            $page = 1;
+            $sessions = [];
+        }
     }
 
     View::render('album/event', [
@@ -142,7 +142,43 @@ $router->get('/e/{slug}', static function (array $params): void {
         'page' => $page,
         'totalPages' => $totalPages,
         'totalSessions' => $totalSessions,
+        'albumBase' => $albumBase,
     ]);
+};
+
+$router->get('/e/{slug}', static function (array $params) use ($renderEventAlbum): void {
+    $pdo = Database::pdo();
+    $event = null;
+    if ($pdo !== null) {
+        try {
+            $event = Album::eventBySlug($pdo, (string) ($params['slug'] ?? ''));
+        } catch (PDOException) {
+            $event = null;
+        }
+    }
+
+    $renderEventAlbum($event, '/e/' . (string) ($params['slug'] ?? ''));
+});
+
+$router->get('/gallery/{tenant}/{event}', static function (array $params) use ($renderEventAlbum): void {
+    $pdo = Database::pdo();
+    $event = null;
+    if ($pdo !== null) {
+        try {
+            $event = Album::eventByTenantEventSlug(
+                $pdo,
+                (string) ($params['tenant'] ?? ''),
+                (string) ($params['event'] ?? '')
+            );
+        } catch (PDOException) {
+            $event = null;
+        }
+    }
+
+    $renderEventAlbum(
+        $event,
+        '/gallery/' . (string) ($params['tenant'] ?? '') . '/' . (string) ($params['event'] ?? '')
+    );
 });
 
 $router->get('/s/{code}', static function (array $params): void {
@@ -3523,12 +3559,14 @@ $router->get('/api/app/events', static function () use ($appDeviceContext): void
         Json::error('Layanan belum siap. Silakan coba lagi.', 503, 'server_error');
     }
 
+    $tenantSlug = isset($tenant['slug']) ? (string) $tenant['slug'] : null;
     $events = [];
     foreach ($eventRows as $row) {
         $events[] = [
             'id' => (int) $row['id'],
             'name' => (string) $row['name'],
             'slug' => (string) $row['slug'],
+            'album_url' => Album::galleryUrl(Config::appUrl(), $tenantSlug, (string) $row['slug']),
             'event_date' => !empty($row['starts_at'])
                 ? date('c', (int) strtotime((string) $row['starts_at']))
                 : null,
@@ -3628,7 +3666,11 @@ $router->post('/api/app/sessions', static function () use ($appDeviceContext, $r
             'id' => (int) ($session['id'] ?? 0),
             'code' => (string) ($session['code'] ?? ''),
         ],
-        'album_url' => Config::appUrl() . '/e/' . (string) $event['slug'],
+        'album_url' => Album::galleryUrl(
+            Config::appUrl(),
+            isset($tenant['slug']) ? (string) $tenant['slug'] : null,
+            (string) $event['slug']
+        ),
         'session_url' => Config::appUrl() . '/s/' . (string) ($session['code'] ?? ''),
     ]);
 });
@@ -3672,11 +3714,13 @@ $driveCap = static function (mixed $value, int $max): ?string {
 /** Jenis media yang sah (enum media_files.kind pada skema). */
 $driveKinds = ['final', 'original', 'gif', 'video', 'thumb'];
 
-/** Folder tujuan per jenis media: final & original punya subfolder khusus, sisanya di folder sesi. */
+/** Folder tujuan per jenis media: final, original, gif, dan video (boomerang) punya subfolder sendiri; thumb di folder sesi. */
 $driveFolderForKind = static function (array $folders, string $kind): string {
     return match ($kind) {
         'final' => $folders['final'],
         'original' => $folders['originals'],
+        'gif' => $folders['gif'] ?? $folders['session'],
+        'video' => $folders['video'] ?? $folders['session'],
         default => $folders['session'],
     };
 };
@@ -3813,6 +3857,8 @@ $ensureSessionFolders = static function (
 
     $finalId = GoogleDrive::ensureFolder($accessToken, 'final', $sessionFolderId);
     $originalsId = GoogleDrive::ensureFolder($accessToken, 'originals', $sessionFolderId);
+    $gifId = GoogleDrive::ensureFolder($accessToken, 'gif', $sessionFolderId);
+    $videoId = GoogleDrive::ensureFolder($accessToken, 'video', $sessionFolderId);
 
     if (empty($session['drive_folder_id'])) {
         try {
@@ -3827,6 +3873,8 @@ $ensureSessionFolders = static function (
         'session' => $sessionFolderId,
         'final' => $finalId,
         'originals' => $originalsId,
+        'gif' => $gifId,
+        'video' => $videoId,
     ];
 };
 
@@ -3834,7 +3882,7 @@ $ensureSessionFolders = static function (
  * Siapkan seluruh folder sesi di Drive (dipanggil aplikasi
  * sebelum mulai mengunggah foto sesi). Body: {session_id}.
  * Balasan: {status: "ok", folders: {event, session, final,
- * originals}} — ID folder Drive tiap tingkat.
+ * originals, gif, video}} — ID folder Drive tiap tingkat.
  */
 $router->post('/api/drive/session-folders', static function () use ($readJsonBody, $driveContext, $ensureSessionFolders): void {
     $body = $readJsonBody();

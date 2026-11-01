@@ -40,7 +40,8 @@ final class Album
     {
         $stmt = $pdo->prepare(
             'SELECT e.*,
-                    COALESCE(NULLIF(t.vendor_name, \'\'), t.name) AS vendor_name
+                    COALESCE(NULLIF(t.vendor_name, \'\'), t.name) AS vendor_name,
+                    t.slug AS tenant_slug
                FROM events e
                JOIN tenants t ON t.id = e.tenant_id
               WHERE e.slug = :slug
@@ -50,6 +51,42 @@ final class Album
         $row = $stmt->fetch();
 
         return $row === false ? null : $row;
+    }
+
+    /**
+     * Event dari pasangan slug tenant + slug event — bentuk URL
+     * galeri yang diminta pemilik booth:
+     * /gallery/{slug-tenant}/{slug-event}. Kolom yang dikembalikan
+     * sama seperti eventBySlug.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function eventByTenantEventSlug(PDO $pdo, string $tenantSlug, string $eventSlug): ?array
+    {
+        $stmt = $pdo->prepare(
+            'SELECT e.*,
+                    COALESCE(NULLIF(t.vendor_name, \'\'), t.name) AS vendor_name,
+                    t.slug AS tenant_slug
+               FROM events e
+               JOIN tenants t ON t.id = e.tenant_id
+              WHERE t.slug = :tenant_slug AND e.slug = :event_slug
+              LIMIT 1'
+        );
+        $stmt->execute(['tenant_slug' => $tenantSlug, 'event_slug' => $eventSlug]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    /** URL galeri event bentuk /gallery/{tenant}/{event} (fallback /e/{slug} bila slug tenant kosong). */
+    public static function galleryUrl(string $appUrl, ?string $tenantSlug, string $eventSlug): string
+    {
+        $tenantSlug = trim((string) $tenantSlug);
+        if ($tenantSlug !== '') {
+            return $appUrl . '/gallery/' . $tenantSlug . '/' . $eventSlug;
+        }
+
+        return $appUrl . '/e/' . $eventSlug;
     }
 
     public static function countSessions(PDO $pdo, int $eventId): int
@@ -77,6 +114,8 @@ final class Album
             'SELECT s.*,
                     (SELECT COUNT(*) FROM media_files m
                       WHERE m.session_id = s.id) AS media_count,
+                    (SELECT COUNT(*) FROM media_files m
+                      WHERE m.session_id = s.id AND m.kind = \'video\') AS video_count,
                     (SELECT m.thumbnail_link FROM media_files m
                       WHERE m.session_id = s.id
                         AND m.thumbnail_link IS NOT NULL
@@ -115,9 +154,11 @@ final class Album
     public static function sessionByCode(PDO $pdo, string $code): ?array
     {
         $stmt = $pdo->prepare(
-            'SELECT s.*, e.name AS event_name, e.slug AS event_slug
+            'SELECT s.*, e.name AS event_name, e.slug AS event_slug,
+                    t.slug AS tenant_slug
                FROM sessions s
                JOIN events e ON e.id = s.event_id
+               JOIN tenants t ON t.id = e.tenant_id
               WHERE s.code = :code
               LIMIT 1'
         );

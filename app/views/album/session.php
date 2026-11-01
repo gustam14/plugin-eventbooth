@@ -13,6 +13,7 @@
 
 $eventName = (string) ($session['event_name'] ?? '');
 $eventSlug = (string) ($session['event_slug'] ?? '');
+$albumHref = Album::galleryUrl('', isset($session['tenant_slug']) ? (string) $session['tenant_slug'] : null, $eventSlug);
 $code = (string) ($session['code'] ?? '');
 $guestName = trim((string) ($session['guest_name'] ?? ''));
 $createdLabel = isset($session['created_at'])
@@ -165,7 +166,7 @@ $createdLabel = isset($session['created_at'])
                 <span class="brandmark-text">Plugin <span class="accent">Eventbooth</span><span class="brandmark-sub">by EventBooth</span></span>
             </a>
         </div>
-        <a class="back-link" href="/e/<?= e($eventSlug) ?>">&larr; Album Event</a>
+        <a class="back-link" href="<?= e($albumHref) ?>">&larr; Album Event</a>
     </div>
 </header>
 

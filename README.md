@@ -1,5 +1,16 @@
 # Plugin Eventbooth — Website
 
+- **URL galeri + album per sesi + folder gif/video (v0.9.0):**
+  album event kini juga hidup di `/gallery/{slug-tenant}/
+  {slug-event}` (URL lama `/e/{slug}` tetap bekerja; tautan
+  kembali dari halaman sesi dan `album_url` pada API aplikasi
+  memakai bentuk galeri). Kartu sesi pada album event bergaya
+  galeri per sesi: sampul potret, lencana jumlah "N Item" dan
+  lencana "VIDEO" bila sesi memuat video. Rantai folder Drive
+  sesi bertambah subfolder `gif` dan `video` (boomerang);
+  pemetaan jenis media: final→final, original→originals,
+  gif→gif, video→video.
+
 Platform pendamping DSLRBooth untuk self-booth mandiri:
 manajemen lisensi aplikasi booth (multi-tenant + Super Admin),
 album event online (file tetap di Google Drive), dan pembayaran

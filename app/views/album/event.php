@@ -6,11 +6,12 @@
  * @var string $appName
  * @var string $appUrl
  * @var string $version
- * @var array<string, mixed> $event Event (+ vendor_name).
- * @var array<int, array<string, mixed>> $sessions Sesi satu halaman (+ media_count, cover_url).
+ * @var array<string, mixed> $event Event (+ vendor_name, tenant_slug).
+ * @var array<int, array<string, mixed>> $sessions Sesi satu halaman (+ media_count, video_count, cover_url).
  * @var int $page Halaman saat ini (1-based).
  * @var int $totalPages Total halaman.
  * @var int $totalSessions Total sesi pada event ini.
+ * @var string $albumBase Awalan URL halaman ini (/e/{slug} atau /gallery/{tenant}/{event}).
  */
 
 $eventName = (string) ($event['name'] ?? '');
@@ -106,8 +107,18 @@ $slug = (string) ($event['slug'] ?? '');
         transition: transform 160ms ease, border-color 160ms ease;
     }
     .session-card:hover { transform: translateY(-2px); border-color: rgba(201, 162, 75, .45); text-decoration: none; }
-    .session-card .cover { aspect-ratio: 4 / 3; background: #0D1015; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-    .session-card .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .session-card .cover { position: relative; aspect-ratio: 4 / 5; background: #0D1015; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .session-card .cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+    .session-card .badge {
+        position: absolute; top: 10px; z-index: 2;
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 4px 10px; border-radius: 999px;
+        background: rgba(8, 10, 13, .78); color: #fff;
+        font-size: 12px; font-weight: 700; letter-spacing: .02em;
+        -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    }
+    .session-card .badge.count { left: 10px; }
+    .session-card .badge.video { right: 10px; background: rgba(201, 162, 75, .92); color: var(--gold-ink); }
     .session-card .cover .placeholder {
         display: flex; flex-direction: column; align-items: center; gap: 8px;
         color: var(--muted-2); font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
@@ -205,11 +216,21 @@ $slug = (string) ($event['slug'] ?? '');
                                     Foto sesi
                                 </span>
                             <?php endif; ?>
+                            <span class="badge count">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.4"/><path d="M21 16l-5-5-9 9"/></svg>
+                                <?= number_format((int) ($session['media_count'] ?? 0), 0, ',', '.') ?> Item
+                            </span>
+                            <?php if ((int) ($session['video_count'] ?? 0) > 0): ?>
+                                <span class="badge video">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M7 5.5v13l11-6.5z"/></svg>
+                                    VIDEO
+                                </span>
+                            <?php endif; ?>
                         </span>
                         <span class="body">
                             <span class="guest"><?= e($guestName !== '' ? $guestName : 'Sesi ' . (string) $session['code']) ?></span>
                             <span class="detail" style="display: block;">
-                                <?= e($createdLabel) ?> · <?= number_format((int) ($session['media_count'] ?? 0), 0, ',', '.') ?> foto
+                                <?= e($createdLabel) ?>
                             </span>
                         </span>
                     </a>
@@ -219,11 +240,11 @@ $slug = (string) ($event['slug'] ?? '');
             <?php if (($totalPages ?? 1) > 1): ?>
                 <nav class="pager" aria-label="Halaman album">
                     <?php if (($page ?? 1) > 1): ?>
-                        <a href="/e/<?= e($slug) ?>?page=<?= (int) $page - 1 ?>">&larr; Sebelumnya</a>
+                        <a href="<?= e((string) ($albumBase ?? ('/e/' . $slug))) ?>?page=<?= (int) $page - 1 ?>">&larr; Sebelumnya</a>
                     <?php endif; ?>
                     <span>Halaman <?= (int) ($page ?? 1) ?> dari <?= (int) $totalPages ?></span>
                     <?php if (($page ?? 1) < ($totalPages ?? 1)): ?>
-                        <a href="/e/<?= e($slug) ?>?page=<?= (int) $page + 1 ?>">Berikutnya &rarr;</a>
+                        <a href="<?= e((string) ($albumBase ?? ('/e/' . $slug))) ?>?page=<?= (int) $page + 1 ?>">Berikutnya &rarr;</a>
                     <?php endif; ?>
                 </nav>
             <?php endif; ?>
