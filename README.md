@@ -1,5 +1,18 @@
 # Plugin Eventbooth — Website
 
+- **Perbaikan thumbnail kedaluwarsa (v0.14.3):** tautan
+  thumbnail Drive tersimpan adalah URL drive-storage
+  bertanda tangan yang mati dalam hitungan jam (galeri sesi
+  lama membalas 403 walau berkasnya sehat — unduhannya 200).
+  Album::sizedImageUrl kini selalu memakai pola kanonis
+  lh3.googleusercontent.com/d/{file_id}=s{ukuran}; tautan
+  tersimpan hanya cadangan bila file_id kosong.
+
+- **Unggahan manual diperbaiki (v0.14.2):** badan PUT
+  resumable sisi server diganti POSTFIELDS (cara INFILE
+  mengirim badan kosong di hosting ini) + alasan gagal
+  ditampilkan rinci di flash dashboard.
+
 - **Pilihan massal + hapus event (v0.14.1):** halaman Kelola
   Album kini punya centang pada tiap berkas dan sesi (+
   "pilih semua berkas" per sesi) dengan bilah aksi lengket
