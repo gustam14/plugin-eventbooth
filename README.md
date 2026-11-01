@@ -1,5 +1,19 @@
 # Plugin Eventbooth — Website
 
+- **Penyegaran tampilan (v0.15.0, keputusan pemilik: tetap
+  PHP ringan, tanpa migrasi Laravel):** sistem desain
+  dashboard disegarkan di tempat (nama kelas sama, nol
+  perubahan perilaku) — latar ambien emas berkisi halus,
+  permukaan panel/kartu/tabel bergradasi dengan garis cahaya
+  atas + bayangan berlapis, gradasi emas tiga henti, pil
+  status bertitik penanda, menu aktif bergradasi, bilah atas
+  blur lebih kuat, kartu masuk bercincin emas. Galeri publik
+  ikut: kartu sesi/media membayang & terangkat saat disentuh
+  kursor, sampul memperbesar perlahan, lencana kaca buram,
+  tombol putar berubah emas saat hover, penampil media
+  berlatar buram dengan bayangan besar, dan dukungan
+  prefers-reduced-motion di semua permukaan.
+
 - **Perbaikan thumbnail kedaluwarsa (v0.14.3):** tautan
   thumbnail Drive tersimpan adalah URL drive-storage
   bertanda tangan yang mati dalam hitungan jam (galeri sesi

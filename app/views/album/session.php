@@ -71,7 +71,12 @@ foreach (($media ?? []) as $item) {
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
         font-family: var(--font);
-        background: var(--bg);
+        /* Latar ambien (v0.15.0), selaras dashboard & album. */
+        background:
+            radial-gradient(880px 480px at 88% -10%, rgba(201, 162, 75, .07), transparent 62%),
+            radial-gradient(720px 460px at -12% 108%, rgba(201, 162, 75, .045), transparent 60%),
+            var(--bg);
+        background-attachment: fixed;
         color: var(--text);
         line-height: 1.65;
         font-size: 16px;
@@ -109,7 +114,7 @@ foreach (($media ?? []) as $item) {
     /* ---------- Kepala sesi ---------- */
     .album-head {
         padding: 48px 0 6px;
-        background: radial-gradient(720px 380px at 85% -20%, rgba(201, 162, 75, .13), transparent 62%);
+        background: radial-gradient(720px 380px at 85% -20%, rgba(201, 162, 75, .17), transparent 62%);
     }
     .album-head .kicker {
         font-size: 12.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--gold-2);
@@ -125,10 +130,14 @@ foreach (($media ?? []) as $item) {
     }
     .media-card {
         background: linear-gradient(180deg, var(--panel-2), var(--panel));
-        border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+        border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+        box-shadow: 0 10px 26px rgba(0, 0, 0, .30);
+        transition: border-color 200ms ease, box-shadow 200ms ease;
     }
+    .media-card:hover { border-color: rgba(201, 162, 75, .35); box-shadow: 0 18px 38px rgba(0, 0, 0, .42); }
     .media-card .cover { aspect-ratio: 4 / 3; background: #0D1015; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-    .media-card .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .media-card .cover img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 400ms ease; }
+    .media-card:hover .cover img { transform: scale(1.035); }
     .media-card .cover .placeholder {
         display: flex; flex-direction: column; align-items: center; gap: 8px;
         color: var(--muted-2); font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
@@ -143,8 +152,8 @@ foreach (($media ?? []) as $item) {
         transition: border-color 150ms ease, background 150ms ease;
     }
     .media-card .actions a:hover { border-color: rgba(201, 162, 75, .55); text-decoration: none; }
-    .media-card .actions a.download { background: var(--gold-grad); color: var(--gold-ink); border-color: transparent; }
-    .media-card .actions a.download:hover { filter: brightness(1.05); }
+    .media-card .actions a.download { background: var(--gold-grad); color: var(--gold-ink); border-color: transparent; box-shadow: 0 6px 16px rgba(201, 162, 75, .22); }
+    .media-card .actions a.download:hover { filter: brightness(1.06); }
 
     .empty {
         margin-top: 34px; padding: 44px 28px; text-align: center;
@@ -160,8 +169,15 @@ foreach (($media ?? []) as $item) {
     }
     .media-card .play-badge span {
         display: inline-flex; align-items: center; justify-content: center;
-        width: 52px; height: 52px; border-radius: 50%;
-        background: rgba(8, 10, 13, .72); border: 1px solid rgba(255, 255, 255, .35);
+        width: 56px; height: 56px; border-radius: 50%;
+        background: rgba(8, 10, 13, .68); border: 1px solid rgba(255, 255, 255, .35);
+        -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+        box-shadow: 0 12px 28px rgba(0, 0, 0, .45);
+        transition: background 200ms ease, color 200ms ease, border-color 200ms ease, transform 200ms ease;
+    }
+    .media-card:hover .play-badge span {
+        background: rgba(201, 162, 75, .92); color: var(--gold-ink);
+        border-color: transparent; transform: scale(1.06);
     }
     .media-card .actions button {
         flex: 1; text-align: center; font-size: 13.5px; font-weight: 700; font-family: inherit;
@@ -172,7 +188,8 @@ foreach (($media ?? []) as $item) {
     .media-card .actions button:hover { border-color: rgba(201, 162, 75, .55); }
     .lightbox {
         position: fixed; inset: 0; z-index: 200; display: none;
-        background: rgba(4, 5, 7, .96); flex-direction: column;
+        background: rgba(4, 5, 7, .92); flex-direction: column;
+        -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
     }
     .lightbox.open { display: flex; }
     .lb-top {
@@ -188,14 +205,17 @@ foreach (($media ?? []) as $item) {
     }
     .lb-actions a:hover, .lb-actions button:hover { border-color: rgba(201, 162, 75, .6); text-decoration: none; }
     .lb-stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 4px 12px; }
-    .lb-stage img, .lb-stage video { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
-    .lb-stage iframe.lb-frame { width: 100%; height: 100%; max-height: 100%; border: 0; border-radius: 8px; background: #000; }
+    .lb-stage img, .lb-stage video { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 12px; box-shadow: 0 30px 80px rgba(0, 0, 0, .6); }
+    .lb-stage iframe.lb-frame { width: 100%; height: 100%; max-height: 100%; border: 0; border-radius: 12px; background: #000; }
     .lb-nav {
         position: absolute; top: 50%; transform: translateY(-50%);
         width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line-strong);
-        background: rgba(10, 12, 15, .65); color: #fff; font-size: 20px; cursor: pointer;
+        background: rgba(10, 12, 15, .6); color: #fff; font-size: 20px; cursor: pointer;
+        -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
         display: flex; align-items: center; justify-content: center;
+        transition: border-color 180ms ease, background 180ms ease;
     }
+    .lb-nav:hover { border-color: rgba(201, 162, 75, .65); background: rgba(201, 162, 75, .16); }
     .lb-nav.prev { left: 12px; }
     .lb-nav.next { right: 12px; }
     .lb-caption { text-align: center; color: var(--muted); font-size: 13.5px; padding: 8px 16px 4px; word-break: break-all; }
@@ -204,10 +224,12 @@ foreach (($media ?? []) as $item) {
         padding: 10px 16px 16px; max-width: 100%;
     }
     .lb-strip button {
-        flex: none; width: 62px; height: 62px; border-radius: 8px; overflow: hidden;
+        flex: none; width: 62px; height: 62px; border-radius: 10px; overflow: hidden;
         border: 2px solid transparent; padding: 0; cursor: pointer; background: #0D1015;
+        transition: border-color 180ms ease, transform 180ms ease;
     }
-    .lb-strip button.active { border-color: var(--gold); }
+    .lb-strip button:hover { border-color: var(--line-strong); }
+    .lb-strip button.active { border-color: var(--gold); transform: translateY(-2px); }
     .lb-strip img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
     /* ---------- Kaki (pola sama dengan landing) ---------- */
@@ -229,6 +251,12 @@ foreach (($media ?? []) as $item) {
         .site-head .wrap { height: 60px; }
         .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
         footer.site-foot { margin-top: 56px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { transition: none !important; }
+        .media-card:hover .cover img { transform: none; }
+        .media-card:hover .play-badge span { transform: none; }
+        .lb-strip button.active { transform: none; }
     }
 </style>
 </head>

@@ -51,7 +51,13 @@ $slug = (string) ($event['slug'] ?? '');
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
         font-family: var(--font);
-        background: var(--bg);
+        /* Latar ambien (v0.15.0): cahaya emas halus tetap di
+           tempat saat digulir, selaras dashboard. */
+        background:
+            radial-gradient(880px 480px at 88% -10%, rgba(201, 162, 75, .07), transparent 62%),
+            radial-gradient(720px 460px at -12% 108%, rgba(201, 162, 75, .045), transparent 60%),
+            var(--bg);
+        background-attachment: fixed;
         color: var(--text);
         line-height: 1.65;
         font-size: 16px;
@@ -87,7 +93,7 @@ $slug = (string) ($event['slug'] ?? '');
     /* ---------- Kepala album ---------- */
     .album-head {
         padding: 56px 0 10px;
-        background: radial-gradient(720px 380px at 85% -20%, rgba(201, 162, 75, .13), transparent 62%);
+        background: radial-gradient(720px 380px at 85% -20%, rgba(201, 162, 75, .17), transparent 62%);
     }
     .album-head .kicker {
         font-size: 12.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--gold-2);
@@ -103,19 +109,22 @@ $slug = (string) ($event['slug'] ?? '');
     }
     .session-card {
         display: block; background: linear-gradient(180deg, var(--panel-2), var(--panel));
-        border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
-        transition: transform 160ms ease, border-color 160ms ease;
+        border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+        box-shadow: 0 10px 26px rgba(0, 0, 0, .30);
+        transition: transform 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
     }
-    .session-card:hover { transform: translateY(-2px); border-color: rgba(201, 162, 75, .45); text-decoration: none; }
+    .session-card:hover { transform: translateY(-4px); border-color: rgba(201, 162, 75, .45); box-shadow: 0 22px 44px rgba(0, 0, 0, .45); text-decoration: none; }
     .session-card .cover { position: relative; aspect-ratio: 4 / 5; background: #0D1015; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-    .session-card .cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+    .session-card .cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 400ms ease; }
+    .session-card:hover .cover img { transform: scale(1.045); }
     .session-card .badge {
         position: absolute; top: 10px; z-index: 2;
         display: inline-flex; align-items: center; gap: 5px;
         padding: 4px 10px; border-radius: 999px;
-        background: rgba(8, 10, 13, .78); color: #fff;
+        background: rgba(8, 10, 13, .72); color: #fff;
+        border: 1px solid rgba(255, 255, 255, .14);
         font-size: 12px; font-weight: 700; letter-spacing: .02em;
-        -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
     }
     .session-card .badge.count { left: 10px; }
     .session-card .badge.video { right: 10px; background: rgba(201, 162, 75, .92); color: var(--gold-ink); }
@@ -145,7 +154,7 @@ $slug = (string) ($event['slug'] ?? '');
         font-size: 14.5px; font-weight: 600; padding: 9px 18px; border-radius: 10px;
         border: 1px solid var(--line-strong); color: var(--text);
     }
-    .pager a:hover { border-color: rgba(201, 162, 75, .55); text-decoration: none; }
+    .pager a:hover { border-color: rgba(201, 162, 75, .55); background: rgba(201, 162, 75, .10); text-decoration: none; }
     .pager span { color: var(--muted); border-color: transparent; }
 
     /* ---------- Kaki (pola sama dengan landing) ---------- */
@@ -167,6 +176,11 @@ $slug = (string) ($event['slug'] ?? '');
         .site-head .wrap { height: 60px; }
         .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
         footer.site-foot { margin-top: 56px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { transition: none !important; }
+        .session-card:hover { transform: none; }
+        .session-card:hover .cover img { transform: none; }
     }
 </style>
 </head>
