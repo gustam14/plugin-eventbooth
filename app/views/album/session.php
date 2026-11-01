@@ -32,6 +32,11 @@ foreach (($media ?? []) as $item) {
         // sebagai video, bukan ditampilkan sebagai gambar.
         'video' => $lbKind === 'video'
             || (bool) preg_match('/\.(mp4|mov)$/i', $lbName),
+        // ID berkas untuk pemutar pratinjau (lihat show() di
+        // bawah): rantai unduh Drive terbukti tidak dapat
+        // diputar elemen <video> pada sebagian peramban, jadi
+        // pemutaran memakai pemutar milik Drive sendiri.
+        'drive' => trim((string) ($item['drive_file_id'] ?? '')),
     ];
 }
 ?>
@@ -184,6 +189,7 @@ foreach (($media ?? []) as $item) {
     .lb-actions a:hover, .lb-actions button:hover { border-color: rgba(201, 162, 75, .6); text-decoration: none; }
     .lb-stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 4px 12px; }
     .lb-stage img, .lb-stage video { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
+    .lb-stage iframe.lb-frame { width: 100%; height: 100%; max-height: 100%; border: 0; border-radius: 8px; background: #000; }
     .lb-nav {
         position: absolute; top: 50%; transform: translateY(-50%);
         width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line-strong);
@@ -363,7 +369,19 @@ foreach (($media ?? []) as $item) {
         current = (i + ITEMS.length) % ITEMS.length;
         var item = ITEMS[current];
         stage.innerHTML = '';
-        if (item.video) {
+        if (item.video && item.drive) {
+            // Pemutar pratinjau Drive: memutar langsung di dalam
+            // penampil (Google yang mengalirkan & menyesuaikan
+            // formatnya). Rantai uc?export=… terbukti berhenti
+            // di layar hitam pada peramban desktop & Android
+            // walau berkasnya H.264 standar dan headernya benar.
+            var frame = document.createElement('iframe');
+            frame.src = 'https://drive.google.com/file/d/' + item.drive + '/preview';
+            frame.className = 'lb-frame';
+            frame.allow = 'autoplay; fullscreen; encrypted-media';
+            frame.allowFullscreen = true;
+            stage.appendChild(frame);
+        } else if (item.video) {
             var video = document.createElement('video');
             video.src = '/media/' + item.id + '?s=video';
             video.controls = true;

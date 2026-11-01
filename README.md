@@ -1,5 +1,16 @@
 # Plugin Eventbooth — Website
 
+- **Pemutaran video lewat pemutar pratinjau Drive (v0.12.5):**
+  walau rantai export=view terbukti sehat di sisi server
+  (H.264 Constrained Baseline yuv420p, moov di depan, 206
+  Partial + Accept-Ranges + inline), elemen <video> tetap
+  berhenti di layar hitam pada Chrome desktop & Android.
+  Penampil sesi kini menyematkan pemutar pratinjau Drive
+  (iframe /file/d/{id}/preview) untuk item video/GIF —
+  Google mengalirkan & menyesuaikan formatnya sendiri.
+  Konsekuensi yang diterima: pemutar membawa antarmuka
+  Google di dalam bingkai penampil.
+
 - **Pemutar video memakai aliran inline (v0.12.4):** akar
   masalah GIF tak berputar terbukti dari rantai header:
   export=download menyajikan Content-Disposition: attachment
