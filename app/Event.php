@@ -49,7 +49,11 @@ final class Event
         $stmt = $pdo->prepare(
             'SELECT e.*,
                     (SELECT COUNT(*) FROM sessions s
-                      WHERE s.event_id = e.id) AS session_count
+                      WHERE s.event_id = e.id) AS session_count,
+                    (SELECT MIN(s.created_at) FROM sessions s
+                      WHERE s.event_id = e.id) AS first_session_at,
+                    (SELECT COUNT(*) FROM media_files m
+                      WHERE m.event_id = e.id) AS media_count
                FROM events e
               WHERE e.tenant_id = :tenant_id
               ORDER BY e.id DESC'

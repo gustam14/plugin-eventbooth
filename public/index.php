@@ -2475,12 +2475,25 @@ $router->get('/tenant/events', static function (): void {
         }
     }
 
+    // Retensi plan tenant (v0.18.0): tanggal pembersihan
+    // pertama tiap event dihitung di view dari sesi tertua.
+    $retention = ['days' => 0, 'plan_name' => ''];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $retention = License::retentionOf($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $retention = ['days' => 0, 'plan_name' => ''];
+        }
+    }
+
     View::render('tenant/events/index', [
         'appName' => Config::appName(),
         'appUrl' => Config::appUrl(),
         'user' => $user,
         'flashes' => Flash::pull(),
         'events' => $events,
+        'retentionDays' => (int) $retention['days'],
+        'retentionPlan' => (string) $retention['plan_name'],
     ]);
 });
 
@@ -4550,6 +4563,69 @@ $router->get('/tenant/events/{id}/album/sessions/{sessionId}/download', static f
     }
     header('Content-Type: application/zip');
     header('Content-Disposition: attachment; filename="album-' . (string) ($session['code'] ?? 'sesi') . '.zip"');
+    header('X-Content-Type-Options: nosniff');
+    AlbumZip::send($prepared);
+});
+
+/**
+ * Unduh ZIP SELURUH album event (v0.18.0): semua sesi
+ * event disusun menjadi satu ZIP (folder per kode sesi).
+ * Batas AlbumZip versi album: 1.000 berkas / 1 GB.
+ */
+$router->get('/tenant/events/{id}/album/download', static function (array $params) use ($tenantAlbumEvent, $driveTokenForAccount): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    $albumPath = '/tenant/events/' . (int) $event['id'] . '/album';
+    set_time_limit(0);
+
+    try {
+        $stmt = $pdo->prepare(
+            'SELECT s.*, e.drive_account_id AS event_drive_account_id
+               FROM sessions s
+               JOIN events e ON e.id = s.event_id
+              WHERE s.event_id = :event
+              ORDER BY s.created_at ASC, s.id ASC'
+        );
+        $stmt->execute(['event' => (int) $event['id']]);
+        $groups = [];
+        foreach ($stmt->fetchAll() as $sessionRow) {
+            $groups[] = [
+                'session' => $sessionRow,
+                'media' => Album::mediaForSession($pdo, (int) $sessionRow['id']),
+            ];
+        }
+        $tokens = [];
+        $tokenFor = static function (int $accountId) use ($pdo, $driveTokenForAccount, &$tokens): string {
+            if (!isset($tokens[$accountId])) {
+                [, $token] = $driveTokenForAccount($pdo, $accountId);
+                $tokens[$accountId] = $token;
+            }
+            return $tokens[$accountId];
+        };
+        $prepared = AlbumZip::prepareAlbum($groups, $tokenFor);
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+        redirect($albumPath);
+    } catch (PDOException) {
+        Flash::error('Unduhan album belum dapat diproses.');
+        redirect($albumPath);
+    }
+
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    $slug = preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) ($event['slug'] ?? 'event')) ?? 'event';
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="album-' . $slug . '.zip"');
     header('X-Content-Type-Options: nosniff');
     AlbumZip::send($prepared);
 });

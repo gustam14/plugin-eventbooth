@@ -1,5 +1,20 @@
 # Plugin Eventbooth — Website
 
+- **Unduh ZIP album penuh + tanggal retensi per event
+  (v0.18.0, koreksi pemilik):** GET
+  /tenant/events/{id}/album/download menyusun ZIP SELURUH
+  album event (AlbumZip::prepareAlbum; folder per kode
+  sesi; batas 1.000 berkas / 1 GB) — tombol "Unduh ZIP
+  Album (N berkas)" di Kelola Album dan "Unduh ZIP" per
+  baris di daftar Event. Daftar Event tenant kini punya
+  kolom "Retensi Album": tanggal pembersihan pertama
+  event (sesi tertua + retensi plan; Event::forTenant
+  membawa first_session_at + media_count) berwarna
+  mengikuti zona kuning ≤14 hari / merah ≤3 hari, atau
+  "Tidak dibatasi" / "Belum ada sesi". Panel retensi
+  Kelola Album juga menyebut tanggal pembersihan pertama
+  event ini.
+
 - **Retensi senyap + kode warna + Unduh ZIP (v0.17.0,
   koreksi pemilik):** retensi album berjalan TANPA
   notifikasi WhatsApp ke tenant (workflow "Retensi

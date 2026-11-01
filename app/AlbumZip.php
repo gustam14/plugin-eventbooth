@@ -17,10 +17,12 @@ final class AlbumZip
 {
     public const MAX_FILES = 200;
     public const MAX_BYTES = 314572800; // 300 MB
+    public const MAX_FILES_ALBUM = 1000;
+    public const MAX_BYTES_ALBUM = 1073741824; // 1 GB
 
     /**
-     * Unduh + siapkan semua berkas sesi. Token akses per
-     * akun Drive disediakan pemanggil.
+     * Unduh + siapkan semua berkas SATU sesi. Token akses
+     * per akun Drive disediakan pemanggil.
      *
      * @param array<string, mixed>              $session Baris sessionWithEvent.
      * @param array<int, array<string, mixed>>  $media
@@ -29,50 +31,99 @@ final class AlbumZip
      */
     public static function prepare(array $session, array $media, callable $tokenFor): array
     {
-        if ($media === []) {
-            throw new RuntimeException('Sesi ini belum memiliki berkas untuk diunduh.');
-        }
-        if (count($media) > self::MAX_FILES) {
-            throw new RuntimeException(
-                'Sesi ini memiliki lebih dari ' . self::MAX_FILES
-                . ' berkas — unduh per berkas dari galeri.'
-            );
-        }
-        $total = 0;
-        foreach ($media as $m) {
-            $total += (int) ($m['size_bytes'] ?? 0);
-        }
-        if ($total > self::MAX_BYTES) {
-            throw new RuntimeException(
-                'Ukuran album sesi ini (' . (int) round($total / 1048576)
-                . ' MB) melebihi batas unduh ZIP 300 MB — unduh per berkas dari galeri.'
-            );
-        }
+        return self::prepareGroups(
+            [['session' => $session, 'media' => $media]],
+            self::MAX_FILES,
+            self::MAX_BYTES,
+            'Sesi ini belum memiliki berkas untuk diunduh.',
+            'Sesi ini memiliki lebih dari ' . self::MAX_FILES . ' berkas — unduh per berkas dari galeri.',
+            'Ukuran album sesi ini (%d MB) melebihi batas unduh ZIP 300 MB — unduh per berkas dari galeri.',
+            $tokenFor
+        );
+    }
 
-        $code = preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) ($session['code'] ?? 'sesi')) ?? 'sesi';
-        $fallbackAccount = (int) ($session['event_drive_account_id'] ?? 0);
+    /**
+     * Unduh + siapkan SELURUH album satu event (v0.18.0):
+     * semua sesi, entri dikelompokkan per folder kode sesi.
+     *
+     * @param array<int, array{session: array<string, mixed>, media: array<int, array<string, mixed>>}> $groups
+     * @param callable(int): string $tokenFor
+     * @return array{entries: array<int, array{path: string, name: string}>}
+     */
+    public static function prepareAlbum(array $groups, callable $tokenFor): array
+    {
+        return self::prepareGroups(
+            $groups,
+            self::MAX_FILES_ALBUM,
+            self::MAX_BYTES_ALBUM,
+            'Album event ini belum memiliki berkas untuk diunduh.',
+            'Album ini memiliki lebih dari ' . self::MAX_FILES_ALBUM . ' berkas — unduh per sesi dari Kelola Album.',
+            'Ukuran album ini (%d MB) melebihi batas unduh ZIP 1 GB — unduh per sesi dari Kelola Album.',
+            $tokenFor
+        );
+    }
+
+    /**
+     * Mesin bersama: validasi jumlah/ukuran gabungan, unduh
+     * semua berkas ke sementara, susun daftar entri ZIP.
+     *
+     * @param array<int, array{session: array<string, mixed>, media: array<int, array<string, mixed>>}> $groups
+     * @param callable(int): string $tokenFor
+     * @return array{entries: array<int, array{path: string, name: string}>}
+     */
+    private static function prepareGroups(
+        array $groups,
+        int $maxFiles,
+        int $maxBytes,
+        string $emptyMsg,
+        string $tooManyMsg,
+        string $tooBigMsg,
+        callable $tokenFor
+    ): array {
+        $fileCount = 0;
+        $total = 0;
+        foreach ($groups as $group) {
+            foreach ($group['media'] as $m) {
+                $fileCount++;
+                $total += (int) ($m['size_bytes'] ?? 0);
+            }
+        }
+        if ($fileCount === 0) {
+            throw new RuntimeException($emptyMsg);
+        }
+        if ($fileCount > $maxFiles) {
+            throw new RuntimeException($tooManyMsg);
+        }
+        if ($total > $maxBytes) {
+            throw new RuntimeException(sprintf($tooBigMsg, (int) round($total / 1048576)));
+        }
 
         $entries = [];
         $usedNames = [];
         try {
-            foreach ($media as $m) {
-                $accountId = (int) ($m['drive_account_id'] ?? 0);
-                if ($accountId <= 0) {
-                    $accountId = $fallbackAccount;
+            foreach ($groups as $group) {
+                $session = $group['session'];
+                $code = preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) ($session['code'] ?? 'sesi')) ?? 'sesi';
+                $fallbackAccount = (int) ($session['event_drive_account_id'] ?? 0);
+                foreach ($group['media'] as $m) {
+                    $accountId = (int) ($m['drive_account_id'] ?? 0);
+                    if ($accountId <= 0) {
+                        $accountId = $fallbackAccount;
+                    }
+                    $tmp = self::downloadToTemp(
+                        $tokenFor($accountId),
+                        (string) ($m['drive_file_id'] ?? '')
+                    );
+                    $base = (string) ($m['kind'] ?? 'final') . '_' . self::cleanName((string) ($m['file_name'] ?? 'berkas'));
+                    $name = $code . '/' . $base;
+                    $i = 2;
+                    while (isset($usedNames[$name])) {
+                        $name = $code . '/' . $i . '_' . $base;
+                        $i++;
+                    }
+                    $usedNames[$name] = true;
+                    $entries[] = ['path' => $tmp, 'name' => $name];
                 }
-                $tmp = self::downloadToTemp(
-                    $tokenFor($accountId),
-                    (string) ($m['drive_file_id'] ?? '')
-                );
-                $base = (string) ($m['kind'] ?? 'final') . '_' . self::cleanName((string) ($m['file_name'] ?? 'berkas'));
-                $name = $code . '/' . $base;
-                $i = 2;
-                while (isset($usedNames[$name])) {
-                    $name = $code . '/' . $i . '_' . $base;
-                    $i++;
-                }
-                $usedNames[$name] = true;
-                $entries[] = ['path' => $tmp, 'name' => $name];
             }
         } catch (Throwable $e) {
             foreach ($entries as $entry) {

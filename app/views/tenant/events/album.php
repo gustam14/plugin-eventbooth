@@ -20,6 +20,15 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
 
 $eventId = (int) ($event['id'] ?? 0);
 $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
+$albumMediaTotal = 0;
+$oldestSessionAt = null;
+foreach (($sessionsData ?? []) as $rowData) {
+    $albumMediaTotal += (int) ($rowData['media_total'] ?? 0);
+    $created = (string) ($rowData['session']['created_at'] ?? '');
+    if ($created !== '' && ($oldestSessionAt === null || $created < $oldestSessionAt)) {
+        $oldestSessionAt = $created;
+    }
+}
 ?>
 <style>
     .album-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px; margin-top: 14px; }
@@ -54,6 +63,9 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
     Perubahan langsung terlihat di album publik.
     <a class="btn btn-small" style="margin-left: 10px;" href="/tenant/events">← Daftar Event</a>
     <a class="btn btn-small" href="<?= e($albumUrl) ?>" target="_blank" rel="noopener">Lihat Album Publik</a>
+    <?php if ($albumMediaTotal > 0): ?>
+        <a class="btn btn-small" href="/tenant/events/<?= $eventId ?>/album/download">Unduh ZIP Album (<?= $albumMediaTotal ?> berkas)</a>
+    <?php endif; ?>
 </p>
 
 <div class="panel-box">
@@ -103,7 +115,12 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
     <h3 style="margin-top: 0;">Retensi Album — Plan <?= e((string) ($retentionPlan ?? '')) ?></h3>
     <p class="hint" style="margin: 0;">
         Sesi pada plan Anda disimpan <strong><?= (int) $retentionDays ?> hari</strong>, lalu dibersihkan
-        otomatis dari galeri dan penyimpanan tanpa pemberitahuan. Pantau dari kode warna tiap sesi:
+        otomatis dari galeri dan penyimpanan tanpa pemberitahuan.
+        <?php if ($oldestSessionAt !== null): ?>
+            Sesi tertua event ini mulai dibersihkan pada
+            <strong><?= e(License::formatDateId(date('Y-m-d H:i:s', strtotime((string) $oldestSessionAt) + (int) $retentionDays * 86400))) ?></strong>.
+        <?php endif; ?>
+        Pantau dari kode warna tiap sesi:
         <span class="ret-dot warn"></span>kuning = sisa retensi 14 hari atau kurang
         <span class="ret-dot danger"></span>merah = sisa 3 hari atau kurang / sudah lewat.
         Unduh ZIP sesi yang masih Anda perlukan sebelum masa simpannya habis.
