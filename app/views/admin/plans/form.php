@@ -101,7 +101,7 @@ $err = static function (string $field) use ($errors): string {
                 <label for="retention_days">Retensi Album (hari)</label>
                 <input type="number" id="retention_days" name="retention_days" min="0" step="1" required
                        value="<?= e((string) ($values['retention_days'] ?? '90')) ?>">
-                <div class="hint">0 = album tidak pernah dihapus otomatis. Sesi yang lebih tua dari nilai ini dibersihkan otomatis (berkas di penyimpanan ikut terhapus); tenant menerima peringatan WhatsApp 3 hari sebelumnya dan pemberitahuan setelahnya.</div>
+                <div class="hint">0 = album tidak pernah dihapus otomatis. Sesi yang lebih tua dari nilai ini dibersihkan otomatis (berkas di penyimpanan ikut terhapus) tanpa pemberitahuan; sesi yang mendekati masa hapus ditandai kuning/merah di Kelola Album tenant agar sempat diunduh cadangannya (Unduh ZIP).</div>
                 <?= $err('retention_days') ?>
             </div>
             <div class="field">

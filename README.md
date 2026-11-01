@@ -1,5 +1,23 @@
 # Plugin Eventbooth — Website
 
+- **Retensi senyap + kode warna + Unduh ZIP (v0.17.0,
+  koreksi pemilik):** retensi album berjalan TANPA
+  notifikasi WhatsApp ke tenant (workflow "Retensi
+  Peringatan" dihapus; langkah WA dicabut dari workflow
+  "Retensi Pembersihan" — purge saja). Sebagai gantinya
+  Kelola Album tenant memberi KODE WARNA per sesi dari
+  retensi plan tenant: lencana + garis tepi kuning (sisa
+  ≤14 hari) dan merah (≤3 hari / sudah lewat), panel
+  keterangan retensi di kepala halaman, dan sisa retensi
+  pada baris info sesi lain. Tombol "Unduh ZIP" per sesi
+  di Kelola Album: server menyusun ZIP semua berkas sesi
+  (kelas AlbumZip — ZIP STORE ditulis tangan, tanpa
+  ekstensi zip; berkas diunduh dari Drive ke sementara
+  dulu; batas 200 berkas / 300 MB) lewat GET
+  /tenant/events/{id}/album/sessions/{sessionId}/download
+  (login tenant pemilik). Teks petunjuk plan + panel
+  Ringkasan Super Admin disesuaikan (tanpa janji WA).
+
 - **Retensi album otomatis (v0.16.0, pilihan pemilik):**
   sesi yang umurnya mencapai retensi plan tenant (snapshot
   lisensi; 0 = tidak pernah) dibersihkan otomatis — berkas

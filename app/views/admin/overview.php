@@ -140,9 +140,9 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
     <h2 style="font-size: 16.5px; font-weight: 700; margin-bottom: 6px;">Retensi Album Otomatis</h2>
     <p style="font-size: 14.5px; margin-bottom: 6px;">
         <strong><?= (int) ($retentionDue ?? 0) ?> sesi</strong> telah melewati masa retensi plan tenantnya
-        dan akan dibersihkan oleh workflow harian (berkas di penyimpanan ikut terhapus, tenant menerima
-        pemberitahuan WhatsApp). <strong><?= (int) ($retentionUpcoming ?? 0) ?> sesi</strong> memasuki masa
-        peringatan 3 hari sebelum penghapusan.
+        dan akan dibersihkan senyap oleh workflow harian (berkas di penyimpanan ikut terhapus, tanpa
+        pemberitahuan). <strong><?= (int) ($retentionUpcoming ?? 0) ?> sesi</strong> berada di zona merah
+        retensi (sekitar 3 hari sebelum jatuh tempo) — tenant memantaunya lewat kode warna di Kelola Album.
     </p>
     <p class="hint">
         Retensi mengikuti plan tiap tenant (0 hari = tidak pernah dibersihkan). Pembersihan hanya berjalan

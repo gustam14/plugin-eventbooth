@@ -10,6 +10,8 @@
  * @var array<int, array{type: string, message: string}> $flashes
  * @var array<string, mixed> $event
  * @var array<int, array{session: array<string, mixed>, media: array<int, array<string, mixed>>, media_total: int}> $sessionsData
+ * @var int $retentionDays Retensi album plan tenant (0 = tanpa retensi) — kode warna v0.17.0.
+ * @var string $retentionPlan Nama plan tenant untuk keterangan retensi.
  */
 
 $title = 'Kelola Album';
@@ -36,6 +38,14 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
     .album-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted, #9AA3AF); cursor: pointer; }
     .album-pick input { width: 17px; height: 17px; accent-color: #C9A24B; cursor: pointer; margin: 0; }
     .bulk-bar { position: sticky; bottom: 12px; z-index: 6; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+    .panel-box.ret-warn { border-left: 4px solid #D9A441; }
+    .panel-box.ret-danger { border-left: 4px solid #D9534F; }
+    .ret-badge { display: inline-block; margin-left: 8px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; vertical-align: 2px; }
+    .ret-badge.ret-warn { background: rgba(217,164,65,.18); color: #E8BC63; border: 1px solid rgba(217,164,65,.45); }
+    .ret-badge.ret-danger { background: rgba(217,83,79,.16); color: #F0958F; border: 1px solid rgba(217,83,79,.45); }
+    .ret-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin: 0 4px 0 10px; vertical-align: 0; }
+    .ret-dot.warn { background: #D9A441; }
+    .ret-dot.danger { background: #D9534F; }
 </style>
 
 <p class="sub">
@@ -88,6 +98,19 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
     </form>
 </div>
 
+<?php if (($retentionDays ?? 0) > 0): ?>
+<div class="panel-box">
+    <h3 style="margin-top: 0;">Retensi Album — Plan <?= e((string) ($retentionPlan ?? '')) ?></h3>
+    <p class="hint" style="margin: 0;">
+        Sesi pada plan Anda disimpan <strong><?= (int) $retentionDays ?> hari</strong>, lalu dibersihkan
+        otomatis dari galeri dan penyimpanan tanpa pemberitahuan. Pantau dari kode warna tiap sesi:
+        <span class="ret-dot warn"></span>kuning = sisa retensi 14 hari atau kurang
+        <span class="ret-dot danger"></span>merah = sisa 3 hari atau kurang / sudah lewat.
+        Unduh ZIP sesi yang masih Anda perlukan sebelum masa simpannya habis.
+    </p>
+</div>
+<?php endif; ?>
+
 <?php if ($sessionsData === []): ?>
     <div class="panel-box">
         <p>Belum ada sesi pada event ini. Sesi muncul otomatis saat aplikasi booth dipakai tamu, atau unggah berkas pertama lewat formulir di atas untuk membuat sesi manual.</p>
@@ -118,8 +141,25 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
     $createdLabel = License::formatDateId((string) ($s['created_at'] ?? ''));
     $timeLabel = isset($s['created_at']) ? substr((string) $s['created_at'], 11, 5) : '';
     $guest = trim((string) ($s['guest_name'] ?? ''));
+    $retClass = '';
+    $retBadge = '';
+    $retLeft = null;
+    if (($retentionDays ?? 0) > 0 && !empty($s['created_at'])) {
+        $ageDays = (int) floor((time() - strtotime((string) $s['created_at'])) / 86400);
+        $retLeft = (int) $retentionDays - $ageDays;
+        if ($retLeft < 0) {
+            $retClass = 'ret-danger';
+            $retBadge = 'Lewat masa retensi — menunggu pembersihan';
+        } elseif ($retLeft <= 3) {
+            $retClass = 'ret-danger';
+            $retBadge = 'Sisa retensi ' . $retLeft . ' hari';
+        } elseif ($retLeft <= 14) {
+            $retClass = 'ret-warn';
+            $retBadge = 'Sisa retensi ' . $retLeft . ' hari';
+        }
+    }
     ?>
-    <div class="panel-box">
+    <div class="panel-box <?= $retClass ?>">
         <div class="album-session-head">
             <div>
                 <label class="album-pick" title="Pilih sesi ini untuk dihapus massal">
@@ -127,10 +167,14 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
                            class="session-check" onchange="ebCount();">
                 </label>
                 <strong style="font-size: 16px;">Sesi <?= e($code) ?></strong>
+                <?php if ($retBadge !== ''): ?>
+                    <span class="ret-badge <?= $retClass ?>"><?= e($retBadge) ?></span>
+                <?php endif; ?>
                 <div class="info">
                     <?= e($createdLabel) ?><?= $timeLabel !== '' ? ' · ' . e($timeLabel) : '' ?>
                     · <?= (int) $row['media_total'] ?> berkas
                     <?= $guest !== '' ? '· Tamu: ' . e($guest) : '' ?>
+                    <?= $retLeft !== null && $retBadge === '' ? '· Sisa retensi: ' . $retLeft . ' hari' : '' ?>
                 </div>
             </div>
             <div class="album-actions">
@@ -139,6 +183,9 @@ $albumUrl = ($appUrl ?? '') . '/e/' . (string) ($event['slug'] ?? '');
                            onchange="ebToggleSessionAll(this);">
                     Pilih semua berkas
                 </label>
+                <?php if ((int) $row['media_total'] > 0): ?>
+                    <a class="btn btn-small" href="/tenant/events/<?= $eventId ?>/album/sessions/<?= $sessionId ?>/download">Unduh ZIP</a>
+                <?php endif; ?>
                 <a class="btn btn-small" href="<?= e(($appUrl ?? '') . '/s/' . $code) ?>" target="_blank" rel="noopener">Lihat Publik</a>
                 <form method="post" action="/tenant/events/<?= $eventId ?>/album/sessions/<?= $sessionId ?>/delete"
                       onsubmit="return confirm('Hapus sesi <?= e($code) ?> beserta seluruh berkasnya? Tindakan ini tidak dapat dibatalkan.');">

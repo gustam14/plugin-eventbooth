@@ -4478,6 +4478,16 @@ $router->get('/tenant/events/{id}/album', static function (array $params) use ($
         $sessions = [];
     }
 
+    // Retensi plan tenant (v0.17.0): dasar kode warna sesi
+    // yang mendekati masa hapus di Kelola Album. 0 = tanpa
+    // retensi (tidak ada penandaan).
+    $retention = ['days' => 0, 'plan_name' => ''];
+    try {
+        $retention = License::retentionOf($pdo, $tenantId);
+    } catch (PDOException) {
+        $retention = ['days' => 0, 'plan_name' => ''];
+    }
+
     View::render('tenant/events/album', [
         'appName' => Config::appName(),
         'appUrl' => Config::appUrl(),
@@ -4485,7 +4495,63 @@ $router->get('/tenant/events/{id}/album', static function (array $params) use ($
         'flashes' => Flash::pull(),
         'event' => $event,
         'sessionsData' => $sessions,
+        'retentionDays' => (int) $retention['days'],
+        'retentionPlan' => (string) $retention['plan_name'],
     ]);
+});
+
+/**
+ * Unduh ZIP satu sesi (v0.17.0): semua berkas sesi disusun
+ * server menjadi satu ZIP (AlbumZip) agar tenant punya
+ * cadangan — terutama sebelum retensi membersihkan sesi.
+ * GET unduhan (bukan mutasi): cukup login tenant pemilik.
+ */
+$router->get('/tenant/events/{id}/album/sessions/{sessionId}/download', static function (array $params) use ($tenantAlbumEvent, $driveTokenForAccount): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    $albumPath = '/tenant/events/' . (int) $event['id'] . '/album';
+    $sessionId = (int) ($params['sessionId'] ?? 0);
+
+    try {
+        $session = Album::sessionWithEvent($pdo, $sessionId);
+        if ($session === null || (int) ($session['event_id'] ?? 0) !== (int) $event['id']) {
+            Flash::error('Sesi tidak ditemukan pada event ini.');
+            redirect($albumPath);
+        }
+        $media = Album::mediaForSession($pdo, $sessionId);
+        $tokens = [];
+        $tokenFor = static function (int $accountId) use ($pdo, $driveTokenForAccount, &$tokens): string {
+            if (!isset($tokens[$accountId])) {
+                [, $token] = $driveTokenForAccount($pdo, $accountId);
+                $tokens[$accountId] = $token;
+            }
+            return $tokens[$accountId];
+        };
+        $prepared = AlbumZip::prepare($session, $media, $tokenFor);
+    } catch (RuntimeException $e) {
+        Flash::error($e->getMessage());
+        redirect($albumPath);
+    } catch (PDOException) {
+        Flash::error('Unduhan album belum dapat diproses.');
+        redirect($albumPath);
+    }
+
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="album-' . (string) ($session['code'] ?? 'sesi') . '.zip"');
+    header('X-Content-Type-Options: nosniff');
+    AlbumZip::send($prepared);
 });
 
 $router->post('/tenant/events/{id}/album/media/{mediaId}/delete', static function (array $params) use ($tenantAlbumEvent, $deleteOneMedia): void {
