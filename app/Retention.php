@@ -49,9 +49,14 @@ final class Retention
     {
         $tenantId = (int) ($event['tenant_id'] ?? $event['event_tenant_id'] ?? 0);
         $base = License::retentionOf($pdo, $tenantId);
+        // Baris sesi (Album::sessionWithEvent) memuat 'id' = ID SESI
+        // dan 'event_id' = ID event — event_id WAJIB didahulukan.
+        // (Bug v0.21.0: purge membaca override milik event lain
+        // karena memakai ID sesi, lalu menolak dengan not_expired.)
+        $eventId = (int) ($event['event_id'] ?? $event['id'] ?? 0);
         $override = array_key_exists('retention_override_days', $event)
             ? self::overrideOf($event)
-            : self::overrideByEventId($pdo, (int) ($event['id'] ?? $event['event_id'] ?? 0));
+            : self::overrideByEventId($pdo, $eventId);
         if ($override !== null) {
             return ['days' => $override, 'plan_name' => $base['plan_name'], 'overridden' => true];
         }
