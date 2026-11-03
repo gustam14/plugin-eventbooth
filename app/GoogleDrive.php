@@ -437,7 +437,106 @@ final class GoogleDrive
             return;
         }
 
-        throw new GoogleDriveException("Google menolak penghapusan file (HTTP {$status}).");
+        // Sertakan pesan galat Google bila ada, agar catatan
+        // diagnosis menyebut alasan sebenarnya, bukan hanya kode.
+        $detail = '';
+        $decoded = json_decode($raw, true);
+        if (is_array($decoded) && isset($decoded['error']['message']) && is_string($decoded['error']['message'])) {
+            $detail = ' ' . $decoded['error']['message'];
+        }
+
+        throw new GoogleDriveException("Google menolak penghapusan file (HTTP {$status}).{$detail}");
+    }
+
+    /**
+     * Daftar anak langsung sebuah folder — hanya item yang
+     * terlihat oleh aplikasi (scope drive.file menyembunyikan
+     * item yang tidak dibuat aplikasi ini).
+     *
+     * @return array<int, array{id: string, folder: bool}>
+     * @throws GoogleDriveException
+     */
+    public static function listChildrenOrFail(string $accessToken, string $parentId): array
+    {
+        $children = [];
+        $pageToken = null;
+        do {
+            $query = "'" . $parentId . "' in parents and trashed = false";
+            $url = self::FILES_ENDPOINT
+                . '?q=' . urlencode($query)
+                . '&fields=' . urlencode('files(id,mimeType),nextPageToken')
+                . '&spaces=drive&pageSize=100&supportsAllDrives=true'
+                . ($pageToken !== null ? '&pageToken=' . urlencode($pageToken) : '');
+            $result = self::requestOrFail('GET', $url, [
+                'Authorization: Bearer ' . $accessToken,
+            ]);
+            $files = $result['files'] ?? [];
+            if (is_array($files)) {
+                foreach ($files as $file) {
+                    if (is_array($file) && isset($file['id'])) {
+                        $children[] = [
+                            'id' => (string) $file['id'],
+                            'folder' => ($file['mimeType'] ?? '') === 'application/vnd.google-apps.folder',
+                        ];
+                    }
+                }
+            }
+            $pageToken = isset($result['nextPageToken']) && is_string($result['nextPageToken'])
+                ? $result['nextPageToken']
+                : null;
+        } while ($pageToken !== null);
+
+        return $children;
+    }
+
+    /**
+     * Pindahkan file/folder ke sampah Drive (trashed = true).
+     * Isi sampah dikosongkan Google otomatis setelah 30 hari.
+     *
+     * @throws GoogleDriveException
+     */
+    public static function trashFileOrFail(string $accessToken, string $fileId): void
+    {
+        self::requestOrFail(
+            'PATCH',
+            self::FILES_ENDPOINT . '/' . urlencode($fileId) . '?fields=id&supportsAllDrives=true',
+            ['Authorization: Bearer ' . $accessToken],
+            null,
+            ['trashed' => true]
+        );
+    }
+
+    /**
+     * Buang folder beserta seluruh isinya (v0.21.2).
+     *
+     * Menghapus folder yang MASIH BERISI lewat files.delete
+     * ditolak Google dengan HTTP 403 — terbukti pada purge
+     * event Selfbooth 3 Nov 2026: berkas-berkasnya terhapus,
+     * folder eventnya tertinggal. Karena itu isinya dikosongkan
+     * dulu secara rekursif, folder kosongnya dihapus, dan bila
+     * penghapusan permanen tetap ditolak, folder dipindah ke
+     * sampah sebagai jalan terakhir.
+     *
+     * @throws GoogleDriveException
+     */
+    public static function deleteFolderTreeOrFail(string $accessToken, string $folderId, int $depth = 0): void
+    {
+        if ($depth > 8) {
+            throw new GoogleDriveException('Struktur folder terlalu dalam untuk dibersihkan.');
+        }
+        foreach (self::listChildrenOrFail($accessToken, $folderId) as $child) {
+            if ($child['folder']) {
+                self::deleteFolderTreeOrFail($accessToken, $child['id'], $depth + 1);
+            } else {
+                self::deleteFileOrFail($accessToken, $child['id']);
+            }
+        }
+        try {
+            self::deleteFileOrFail($accessToken, $folderId);
+        } catch (GoogleDriveException) {
+            // Jalan terakhir: pindahkan ke sampah Drive.
+            self::trashFileOrFail($accessToken, $folderId);
+        }
     }
 
     /**

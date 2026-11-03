@@ -359,6 +359,11 @@ final class Album
             'guest_whatsapp' => $guestWhatsapp,
         ]);
 
+        // Event yang albumnya sempat ditandai kosong-retensi
+        // (v0.22.0) hidup lagi begitu ada sesi baru: penanda
+        // Expired dicabut (helper toleran pra-migrasi).
+        Retention::clearEmptied($pdo, $eventId);
+
         $stmt = $pdo->prepare('SELECT * FROM sessions WHERE id = :id LIMIT 1');
         $stmt->execute(['id' => (int) $pdo->lastInsertId()]);
         $row = $stmt->fetch();

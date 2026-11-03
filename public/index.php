@@ -133,6 +133,14 @@ $renderEventAlbum = static function (?array $event, string $albumBase): void {
         }
     }
 
+    // Album yang dikosongkan retensi (v0.22.0): tampilkan
+    // keterangan Expired, bukan "masih kosong". Helper toleran
+    // terhadap kolom yang belum dimigrasi.
+    $retentionEmptiedAt = null;
+    if ($pdo !== null && $totalSessions === 0) {
+        $retentionEmptiedAt = Retention::emptiedAt($pdo, (int) $event['id']);
+    }
+
     View::render('album/event', [
         'appName' => Config::appName(),
         'appUrl' => Config::appUrl(),
@@ -143,6 +151,7 @@ $renderEventAlbum = static function (?array $event, string $albumBase): void {
         'totalPages' => $totalPages,
         'totalSessions' => $totalSessions,
         'albumBase' => $albumBase,
+        'retentionEmptiedAt' => $retentionEmptiedAt,
     ]);
 };
 
@@ -3435,8 +3444,72 @@ $router->post('/api/automation/mark-notified', static function () use ($automati
  * jendela peringatan H-3 (tepat satu hari) lengkap dengan teks
  * pesan WhatsApp siap kirim, meniru pola expiring-licenses.
  */
-$router->get('/api/automation/retention-candidates', static function () use ($automationGuard): void {
+$router->get('/api/automation/retention-candidates', static function () use ($automationGuard, $googleCredentials): void {
     $pdo = $automationGuard();
+
+    // Sapuan album Expired (v0.22.0): event yang albumnya sudah
+    // dikosongkan retensi 30+ hari lalu dan masih kosong
+    // dibersihkan sepenuhnya — folder Drive-nya dibuang beserta
+    // isi, lalu baris event dihapus (paket tercascade, riwayat
+    // pembayaran SET NULL). Berjalan menumpang panggilan harian
+    // workflow, dibatasi 3 event per panggilan agar tetap
+    // ringan; kegagalan satu event menundanya ke hari berikut.
+    $expiredCleaned = 0;
+    $sweepTokens = [];
+    $sweepTokenFor = static function (int $accountId) use ($pdo, $googleCredentials, &$sweepTokens): string {
+        if (isset($sweepTokens[$accountId])) {
+            return $sweepTokens[$accountId];
+        }
+        if ($accountId <= 0) {
+            throw new RuntimeException('Event ini tidak memiliki akun penyimpanan.');
+        }
+        $account = GoogleAccount::find($pdo, $accountId);
+        if ($account === null || (string) ($account['status'] ?? '') !== 'connected') {
+            throw new RuntimeException('Akun penyimpanan sedang tidak terhubung.');
+        }
+        $creds = $googleCredentials($pdo);
+        $clientSecret = $creds['secret_cipher'] !== null ? Crypto::decrypt($creds['secret_cipher']) : null;
+        $refreshToken = Crypto::decrypt((string) ($account['refresh_token_encrypted'] ?? ''));
+        if ($creds['client_id'] === '' || $clientSecret === null || $clientSecret === ''
+            || $refreshToken === null || $refreshToken === '') {
+            throw new RuntimeException('Kredensial Google Drive belum lengkap di server.');
+        }
+        $sweepTokens[$accountId] = GoogleDrive::accessTokenOrFail($creds['client_id'], $clientSecret, $refreshToken);
+
+        return $sweepTokens[$accountId];
+    };
+    foreach (Retention::expiredEmptiedEvents($pdo, 30, 3) as $expiredEvent) {
+        try {
+            $expiredId = (int) $expiredEvent['id'];
+            $accountId = (int) ($expiredEvent['drive_account_id'] ?? 0);
+            if ($accountId > 0) {
+                $accountRow = GoogleAccount::find($pdo, $accountId);
+                $tenantRow = Tenant::find($pdo, (int) $expiredEvent['tenant_id']);
+                if ($accountRow !== null && $tenantRow !== null) {
+                    $token = $sweepTokenFor($accountId);
+                    $rootId = (string) ($accountRow['root_folder_id'] ?? '');
+                    if ($rootId === '') {
+                        $rootId = GoogleDrive::findFolder($token, 'Plugin Eventbooth', 'root') ?? '';
+                    }
+                    if ($rootId !== '') {
+                        $tenantFolderId = GoogleDrive::findFolder($token, Tenant::displayName($tenantRow), $rootId);
+                        if ($tenantFolderId !== null) {
+                            $eventFolderId = GoogleDrive::findFolder($token, (string) $expiredEvent['name'], $tenantFolderId);
+                            if ($eventFolderId !== null) {
+                                GoogleDrive::deleteFolderTreeOrFail($token, $eventFolderId);
+                            }
+                        }
+                    }
+                }
+            }
+            $pdo->prepare('DELETE FROM events WHERE id = :id')->execute(['id' => $expiredId]);
+            $expiredCleaned++;
+        } catch (GoogleDriveException | RuntimeException | PDOException) {
+            // Tunda event ini ke panggilan berikutnya.
+            continue;
+        }
+    }
+
     $mode = isset($_GET['mode']) && $_GET['mode'] === 'upcoming' ? 'upcoming' : 'past';
 
     try {
@@ -3483,6 +3556,7 @@ $router->get('/api/automation/retention-candidates', static function () use ($au
         'items' => $items,
         'mode' => $mode,
         'sender' => $sender,
+        'expired_events_cleaned' => $expiredCleaned,
         'generated_at' => date('c'),
     ]);
 });
@@ -3576,60 +3650,26 @@ $router->post('/api/automation/purge-session', static function () use ($automati
         Json::error('Pembersihan sesi gagal dicatat.', 503, 'server_not_configured');
     }
 
-    // Permintaan pemilik (1 Nov 2026): bila purge ini menghabiskan
-    // sesi TERAKHIR event, event/albumnya ikut dihapus — folder
-    // event di Drive dibuang dulu (gagal di Google = event
-    // dipertahankan sebagai album kosong), lalu baris event
-    // dihapus (paket tercascade; riwayat pembayaran lepas tautan
-    // SET NULL — sama seperti Hapus Event manual). Event yang
-    // belum pernah punya sesi tidak tersentuh: aturan ini hanya
-    // berjalan sebagai akibat sebuah purge.
-    $eventDeleted = false;
-    $eventDeleteNote = null;
+    // Keputusan pemilik (3 Nov 2026, menggantikan hapus event
+    // seketika v0.21.0): bila purge ini menghabiskan sesi
+    // TERAKHIR event, event TIDAK dihapus sekarang — albumnya
+    // ditandai kosong-retensi (retention_emptied_at). Halaman
+    // publik album lalu menampilkan keterangan Expired, dan
+    // event dibersihkan sepenuhnya (folder Drive + baris
+    // event) oleh sapuan harian 30 hari kemudian pada endpoint
+    // kandidat. Event yang belum pernah punya sesi tidak
+    // tersentuh: penandaan hanya berjalan akibat sebuah purge.
+    $albumExpired = false;
     $eventId = (int) ($session['event_id'] ?? 0);
     if ($eventId > 0) {
         try {
             $countStmt = $pdo->prepare('SELECT COUNT(*) FROM sessions WHERE event_id = :event');
             $countStmt->execute(['event' => $eventId]);
             if ((int) $countStmt->fetchColumn() === 0) {
-                $eventAccountId = (int) ($session['event_drive_account_id'] ?? 0);
-                $eventFolderId = (string) ($session['drive_folder_id'] ?? '');
-                if ($eventFolderId === '' && $eventAccountId > 0) {
-                    // Cadangan: cari folder event lewat jalur nama
-                    // Plugin Eventbooth/{Tenant}/{Event} — find-only,
-                    // tidak membuat folder baru.
-                    $accountRow = GoogleAccount::find($pdo, $eventAccountId);
-                    $tenantRow = Tenant::find($pdo, $tenantId);
-                    if ($accountRow !== null && $tenantRow !== null) {
-                        $token = $tokenFor($eventAccountId);
-                        $rootId = (string) ($accountRow['root_folder_id'] ?? '');
-                        if ($rootId === '') {
-                            $rootId = GoogleDrive::findFolder($token, 'Plugin Eventbooth', 'root') ?? '';
-                        }
-                        if ($rootId !== '') {
-                            $tenantFolderId = GoogleDrive::findFolder($token, Tenant::displayName($tenantRow), $rootId);
-                            if ($tenantFolderId !== null) {
-                                $eventFolderId = GoogleDrive::findFolder(
-                                    $token,
-                                    (string) ($session['event_name'] ?? ''),
-                                    $tenantFolderId
-                                ) ?? '';
-                            }
-                        }
-                    }
-                }
-                if ($eventFolderId !== '' && $eventAccountId > 0) {
-                    GoogleDrive::deleteFileOrFail($tokenFor($eventAccountId), $eventFolderId);
-                }
-                $pdo->prepare('DELETE FROM events WHERE id = :id')->execute(['id' => $eventId]);
-                $eventDeleted = true;
+                $albumExpired = Retention::markEmptied($pdo, $eventId);
             }
-        } catch (GoogleDriveException $e) {
-            $eventDeleteNote = 'Folder event di Drive gagal dibuang (' . $e->getMessage() . '); event dipertahankan.';
-        } catch (RuntimeException $e) {
-            $eventDeleteNote = $e->getMessage();
         } catch (PDOException) {
-            $eventDeleteNote = 'Penghapusan event gagal dicatat.';
+            $albumExpired = false;
         }
     }
 
@@ -3664,8 +3704,9 @@ $router->post('/api/automation/purge-session', static function () use ($automati
         'whatsapp' => $whatsapp,
         'plan_name' => $retention['plan_name'],
         'retention_days' => $retDays,
-        'event_deleted' => $eventDeleted,
-        'event_delete_note' => $eventDeleteNote,
+        'event_deleted' => false,
+        'event_delete_note' => null,
+        'album_expired' => $albumExpired,
         'message' => $message,
     ]);
 });

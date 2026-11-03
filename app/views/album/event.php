@@ -214,7 +214,15 @@ $slug = (string) ($event['slug'] ?? '');
 
     <div class="wrap">
         <?php if (($sessions ?? []) === []): ?>
-            <div class="empty">Album masih kosong — foto akan muncul di sini setelah sesi pertama selesai.</div>
+            <?php if (!empty($retentionEmptiedAt)): ?>
+                <?php
+                $expiredLabel = License::formatDateId((string) $retentionEmptiedAt);
+                $closureLabel = License::formatDateId(date('Y-m-d H:i:s', strtotime((string) $retentionEmptiedAt) + 30 * 86400));
+                ?>
+                <div class="empty"><strong>Album Expired</strong> — masa retensi album event ini telah berakhir pada <?= e($expiredLabel) ?>, sehingga seluruh foto di dalamnya telah dibersihkan dari penyimpanan. Halaman ini akan ditutup sepenuhnya pada <?= e($closureLabel) ?>.</div>
+            <?php else: ?>
+                <div class="empty">Album masih kosong — foto akan muncul di sini setelah sesi pertama selesai.</div>
+            <?php endif; ?>
         <?php else: ?>
             <div class="grid">
                 <?php foreach ($sessions as $session): ?>

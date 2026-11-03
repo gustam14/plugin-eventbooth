@@ -225,6 +225,7 @@ CREATE TABLE events (
     status               ENUM('draft','active','finished','archived') NOT NULL DEFAULT 'draft',
     expires_at           DATETIME NULL COMMENT 'Album kedaluwarsa/retensi',
     retention_override_days INT NULL DEFAULT NULL COMMENT 'Override retensi album (hari) per event; NULL = ikut plan tenant (v0.20.0)',
+    retention_emptied_at DATETIME NULL DEFAULT NULL COMMENT 'Kapan album dikosongkan retensi; publik tampil Expired, event dibersihkan 30 hari kemudian (v0.22.0)',
     created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),

@@ -70,4 +70,96 @@ final class Retention
         $stmt = $pdo->prepare('UPDATE events SET retention_override_days = :days WHERE id = :id');
         $stmt->execute(['days' => $days, 'id' => $eventId]);
     }
+
+    /* -----------------------------------------------------------------
+     * Album yang dikosongkan retensi (v0.22.0, keputusan pemilik
+     * 3 Nov 2026): purge sesi terakhir TIDAK lagi menghapus event
+     * seketika. Event ditandai lewat retention_emptied_at; halaman
+     * publik albumnya menampilkan keterangan Expired, dan event
+     * dibersihkan sepenuhnya 30 hari kemudian oleh sapuan pada
+     * endpoint kandidat retensi. Semua pembaca/penulis di bawah
+     * toleran terhadap kolom yang belum dimigrasi.
+     * --------------------------------------------------------------- */
+
+    /** Tandai album event baru saja dikosongkan retensi. */
+    public static function markEmptied(PDO $pdo, int $eventId): bool
+    {
+        if ($eventId <= 0) {
+            return false;
+        }
+        try {
+            $stmt = $pdo->prepare(
+                'UPDATE events SET retention_emptied_at = NOW()
+                  WHERE id = :id AND retention_emptied_at IS NULL'
+            );
+            $stmt->execute(['id' => $eventId]);
+
+            return $stmt->rowCount() > 0 || self::emptiedAt($pdo, $eventId) !== null;
+        } catch (PDOException) {
+            return false; // Kolom belum dimigrasi.
+        }
+    }
+
+    /** Kapan album event dikosongkan retensi (null = tidak ditandai). */
+    public static function emptiedAt(PDO $pdo, int $eventId): ?string
+    {
+        if ($eventId <= 0) {
+            return null;
+        }
+        try {
+            $stmt = $pdo->prepare('SELECT retention_emptied_at FROM events WHERE id = :id');
+            $stmt->execute(['id' => $eventId]);
+            $v = $stmt->fetchColumn();
+
+            return $v === false || $v === null ? null : (string) $v;
+        } catch (PDOException) {
+            return null; // Kolom belum dimigrasi.
+        }
+    }
+
+    /** Cabut penanda kosong-retensi (event dipakai lagi). */
+    public static function clearEmptied(PDO $pdo, int $eventId): void
+    {
+        if ($eventId <= 0) {
+            return;
+        }
+        try {
+            $stmt = $pdo->prepare(
+                'UPDATE events SET retention_emptied_at = NULL
+                  WHERE id = :id AND retention_emptied_at IS NOT NULL'
+            );
+            $stmt->execute(['id' => $eventId]);
+        } catch (PDOException) {
+            // Kolom belum dimigrasi — tidak ada yang dibersihkan.
+        }
+    }
+
+    /**
+     * Event yang albumnya sudah kosong-retensi selama $days hari
+     * atau lebih DAN masih tidak memiliki sesi — kandidat
+     * dibersihkan sepenuhnya oleh sapuan harian.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function expiredEmptiedEvents(PDO $pdo, int $days = 30, int $limit = 3): array
+    {
+        try {
+            $stmt = $pdo->prepare(
+                'SELECT e.id, e.name, e.tenant_id, e.drive_account_id, e.retention_emptied_at
+                   FROM events e
+                  WHERE e.retention_emptied_at IS NOT NULL
+                    AND e.retention_emptied_at <= DATE_SUB(NOW(), INTERVAL :days DAY)
+                    AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.event_id = e.id)
+                  ORDER BY e.retention_emptied_at ASC
+                  LIMIT :limit'
+            );
+            $stmt->bindValue('days', $days, PDO::PARAM_INT);
+            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
+            $stmt->execute();
+
+            return $stmt->fetchAll() ?: [];
+        } catch (PDOException) {
+            return []; // Kolom belum dimigrasi.
+        }
+    }
 }
