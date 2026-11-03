@@ -4901,6 +4901,77 @@ $router->post('/admin/events/{id}/settings', static function (array $params): vo
     redirect($back);
 });
 
+// Tandai album kosong sebagai Expired secara manual (v0.22.1,
+// permintaan pemilik): untuk album lama yang dikosongkan
+// retensi sebelum penandaan otomatis v0.22.0 ada. Hanya untuk
+// event yang sesinya sudah nol.
+$router->post('/admin/events/{id}/mark-expired', static function (array $params): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel.');
+        redirect('/admin');
+    }
+    $event = null;
+    try {
+        $event = Event::find($pdo, (int) ($params['id'] ?? 0));
+    } catch (PDOException) {
+        $event = null;
+    }
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/admin/events');
+    }
+    $back = '/admin/events/' . (int) $event['id'];
+
+    try {
+        $count = Album::countSessions($pdo, (int) $event['id']);
+        if ($count > 0) {
+            Flash::error('Album masih berisi ' . $count . ' sesi — penandaan Expired hanya untuk album kosong.');
+            redirect($back);
+        }
+        if (!Retention::markEmptied($pdo, (int) $event['id'])) {
+            Flash::error('Penandaan Expired belum bisa disimpan — jalankan migrasi database/migrations/2026-11-03-retention-emptied.sql di phpMyAdmin dulu.');
+            redirect($back);
+        }
+    } catch (PDOException) {
+        Flash::error('Penandaan Expired gagal disimpan.');
+        redirect($back);
+    }
+
+    Flash::success('Album event "' . (string) ($event['name'] ?? '') . '" ditandai Expired — halaman publiknya kini menampilkan keterangan berakhir dan event akan dibersihkan sepenuhnya 30 hari lagi.');
+    redirect($back);
+});
+
+// Batalkan penandaan Expired (event dipakai lagi oleh admin).
+$router->post('/admin/events/{id}/unmark-expired', static function (array $params): void {
+    $user = Auth::requireRole('super_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Flash::error('Database belum disetel.');
+        redirect('/admin');
+    }
+    $event = null;
+    try {
+        $event = Event::find($pdo, (int) ($params['id'] ?? 0));
+    } catch (PDOException) {
+        $event = null;
+    }
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/admin/events');
+    }
+    $back = '/admin/events/' . (int) $event['id'];
+
+    Retention::clearEmptied($pdo, (int) $event['id']);
+    Flash::success('Penandaan Expired untuk event "' . (string) ($event['name'] ?? '') . '" dibatalkan.');
+    redirect($back);
+});
+
 $router->post('/admin/events/{id}/album/media/{mediaId}/delete', static function (array $params) use ($deleteOneMedia): void {
     $user = Auth::requireRole('super_admin');
     Auth::requireCsrf();

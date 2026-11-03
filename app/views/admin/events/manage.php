@@ -121,6 +121,44 @@ $retOverrideVal = $event['retention_override_days'] ?? null;
     </form>
 </div>
 
+<?php
+$emptiedAtVal = $event['retention_emptied_at'] ?? null;
+$expiredSessionCount = count($sessionsData ?? []);
+?>
+<div class="panel-box">
+    <h3 style="margin-top: 0;">Album Expired</h3>
+    <?php if ($emptiedAtVal !== null && $emptiedAtVal !== ''): ?>
+        <p class="hint" style="margin-bottom: 12px;">
+            Album event ini ditandai <strong>Expired</strong> sejak <?= e(License::formatDateId((string) $emptiedAtVal)) ?>.
+            Halaman publiknya menampilkan keterangan berakhir, dan event akan dibersihkan sepenuhnya
+            (folder Drive + catatan) oleh sapuan harian pada
+            <strong><?= e(License::formatDateId(date('Y-m-d H:i:s', strtotime((string) $emptiedAtVal) + 30 * 86400))) ?></strong>
+            selama albumnya tetap kosong.
+        </p>
+        <form method="post" action="/admin/events/<?= $eventId ?>/unmark-expired">
+            <?= Auth::csrfField() ?>
+            <button class="btn" type="submit">Batalkan Expired</button>
+        </form>
+    <?php elseif ($expiredSessionCount === 0): ?>
+        <p class="hint" style="margin-bottom: 12px;">
+            Album event ini kosong. Tandai sebagai <strong>Expired</strong> agar halaman publiknya
+            menampilkan keterangan berakhir (bukan &quot;masih kosong&quot;) dan event dibersihkan
+            sepenuhnya 30 hari dari sekarang oleh sapuan harian. Dipakai untuk album lama yang
+            dikosongkan retensi sebelum penandaan otomatis ada.
+        </p>
+        <form method="post" action="/admin/events/<?= $eventId ?>/mark-expired">
+            <?= Auth::csrfField() ?>
+            <button class="btn btn-primary" type="submit">Tandai Expired</button>
+        </form>
+    <?php else: ?>
+        <p class="hint">
+            Album masih berisi <?= $expiredSessionCount ?> sesi. Penandaan Expired hanya tersedia
+            setelah album kosong — biasanya otomatis oleh retensi; tombol manual muncul di sini
+            bila album sudah kosong.
+        </p>
+    <?php endif; ?>
+</div>
+
 <?php if ($sessionsData === []): ?>
     <div class="panel-box">
         <p>Belum ada sesi pada event ini.</p>
