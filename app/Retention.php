@@ -135,6 +135,106 @@ final class Retention
     }
 
     /**
+     * Penandaan Expired OTOMATIS (v0.23.0, permintaan pemilik
+     * 3 Nov 2026: tanpa kelola manual). Event yang albumnya
+     * kosong, belum bertanda, berstatus active/finished, dan
+     * tanggal acaranya sudah lewat ditandai Expired oleh
+     * sapuan harian — menutup album lama yang dikosongkan
+     * sebelum penandaan otomatis ada (atau dikosongkan manual
+     * tenant) tanpa klik apa pun. Syarat pengaman:
+     *  - retensi efektif event harus > 0 (plan/override yang
+     *    menjanjikan TIDAK pernah dibersihkan tidak ditandai);
+     *  - sesi baru tetap mencabut penanda (event dipakai lagi);
+     *  - saat ditandai, override retensi per event DIKOSONGKAN:
+     *    albumnya sudah tidak ada, jadi override tidak lagi
+     *    mengatur apa pun — dan event yang kelak dipakai lagi
+     *    langsung mengikuti retensi plan, bukan override uji
+     *    yang tertinggal.
+     *
+     * @return array<int, array{event_id: int, event_name: string, override_cleared: bool}>
+     */
+    public static function autoMarkEmptiedEvents(PDO $pdo, int $limit = 5): array
+    {
+        try {
+            $stmt = $pdo->query(
+                "SELECT e.id, e.name, e.tenant_id, e.status, e.starts_at, e.ends_at,
+                        e.created_at, e.retention_override_days
+                   FROM events e
+                  WHERE e.retention_emptied_at IS NULL
+                    AND e.status IN ('active', 'finished')
+                    AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.event_id = e.id)
+                  ORDER BY e.id ASC
+                  LIMIT 50"
+            );
+            $rows = $stmt !== false ? ($stmt->fetchAll() ?: []) : [];
+        } catch (PDOException) {
+            return []; // Kolom belum dimigrasi.
+        }
+
+        $now = time();
+        $marked = [];
+        foreach ($rows as $event) {
+            if (count($marked) >= $limit) {
+                break;
+            }
+            if (!self::eventHasEnded($event, $now)) {
+                continue;
+            }
+            $effective = self::forEvent($pdo, $event);
+            if ((int) $effective['days'] <= 0) {
+                continue;
+            }
+            $eventId = (int) $event['id'];
+            if (!self::markEmptied($pdo, $eventId)) {
+                continue;
+            }
+            $hadOverride = self::overrideOf($event) !== null;
+            if ($hadOverride) {
+                try {
+                    self::saveOverride($pdo, $eventId, null);
+                } catch (PDOException) {
+                    // Override tetap menempel; penanda Expired sudah
+                    // tersimpan dan pembersihan 30 hari tidak
+                    // terpengaruh.
+                }
+            }
+            $marked[] = [
+                'event_id' => $eventId,
+                'event_name' => (string) ($event['name'] ?? ''),
+                'override_cleared' => $hadOverride,
+            ];
+        }
+
+        return $marked;
+    }
+
+    /**
+     * Apakah tanggal acara sebuah event sudah lewat?
+     * ends_at didahulukan; tanpa ends_at, starts_at harus
+     * lewat 1 hari; tanpa keduanya, event berumur 7+ hari.
+     *
+     * @param array<string, mixed> $event
+     */
+    private static function eventHasEnded(array $event, int $now): bool
+    {
+        $ends = trim((string) ($event['ends_at'] ?? ''));
+        if ($ends !== '') {
+            $t = strtotime($ends);
+
+            return $t !== false && $t < $now;
+        }
+        $starts = trim((string) ($event['starts_at'] ?? ''));
+        if ($starts !== '') {
+            $t = strtotime($starts);
+
+            return $t !== false && $t < $now - 86400;
+        }
+        $created = strtotime((string) ($event['created_at'] ?? ''));
+
+        return $created !== false && $created < $now - 7 * 86400;
+    }
+
+    /**
      * Event yang albumnya sudah kosong-retensi selama $days hari
      * atau lebih DAN masih tidak memiliki sesi — kandidat
      * dibersihkan sepenuhnya oleh sapuan harian.

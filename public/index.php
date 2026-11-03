@@ -3447,6 +3447,13 @@ $router->post('/api/automation/mark-notified', static function () use ($automati
 $router->get('/api/automation/retention-candidates', static function () use ($automationGuard, $googleCredentials): void {
     $pdo = $automationGuard();
 
+    // Penandaan Expired otomatis (v0.23.0): album kosong yang
+    // tanggal acaranya sudah lewat — termasuk cangkang lama
+    // dari sebelum penandaan otomatis ada — ditandai Expired
+    // tanpa kelola manual, dan override retensinya dikosongkan
+    // agar pemakaian ulang mengikuti retensi plan.
+    $autoMarked = Retention::autoMarkEmptiedEvents($pdo, 5);
+
     // Sapuan album Expired (v0.22.0): event yang albumnya sudah
     // dikosongkan retensi 30+ hari lalu dan masih kosong
     // dibersihkan sepenuhnya — folder Drive-nya dibuang beserta
@@ -3557,6 +3564,7 @@ $router->get('/api/automation/retention-candidates', static function () use ($au
         'mode' => $mode,
         'sender' => $sender,
         'expired_events_cleaned' => $expiredCleaned,
+        'expired_events_marked' => $autoMarked,
         'generated_at' => date('c'),
     ]);
 });
