@@ -124,22 +124,26 @@ $slug = (string) ($event['slug'] ?? '');
     .album-head .meta { color: var(--muted); font-size: 15.5px; }
     .album-head .meta strong { color: var(--text); font-weight: 600; }
 
-    /* ---------- Kepala album dengan banner (v0.25.0) ---------- */
+    /* ---------- Kepala album dengan banner (v0.25.0) ----------
+       Potongan gambar DIJANGKAR KE ATAS (v0.25.1): banner pada
+       umumnya membawa logo/teks di tepi atas dan ruang kosong
+       di bawah untuk judul event — pemotongan dari tengah
+       membuang justru bagian brandingnya. */
     .album-head.has-banner {
         position: relative; overflow: hidden;
-        padding: 138px 0 40px; background: none;
+        padding: 172px 0 40px; background: none;
     }
     .album-head.has-banner .hero-img {
         position: absolute; inset: 0; width: 100%; height: 100%;
-        object-fit: cover; display: block;
+        object-fit: cover; object-position: center top; display: block;
     }
     .album-head.has-banner .hero-shade {
         position: absolute; inset: 0;
-        background: linear-gradient(180deg, rgba(10, 12, 15, .28) 0%, rgba(10, 12, 15, .52) 55%, rgba(10, 12, 15, .93) 100%);
+        background: linear-gradient(180deg, rgba(10, 12, 15, .22) 0%, rgba(10, 12, 15, .48) 55%, rgba(10, 12, 15, .94) 100%);
     }
     .album-head.has-banner .wrap { position: relative; z-index: 1; }
     .album-head.has-banner h1 { text-shadow: 0 2px 20px rgba(0, 0, 0, .5); }
-    .album-head.has-banner .meta { color: #C7CDD6; }
+    .album-head.has-banner .meta { color: #C7CDD6; text-shadow: 0 1px 10px rgba(0, 0, 0, .55); }
 
     /* ---------- Kisi sesi ---------- */
     .grid {
@@ -208,7 +212,18 @@ $slug = (string) ($event['slug'] ?? '');
 
     @media (max-width: 768px) {
         .album-head { padding: 42px 0 6px; }
-        .album-head.has-banner { padding: 96px 0 30px; }
+        /* Di HP banner tampil UTUH sebagai blok 16:9 (v0.25.1):
+           menimpanya dengan judul di layar sempit memotong logo
+           dan teks di tepi banner. Judul, tanggal, dan tombol
+           kontak pindah ke bawah banner di latar halaman. */
+        .album-head.has-banner { padding: 0 0 6px; }
+        .album-head.has-banner .hero-img {
+            position: relative; inset: auto; height: auto; aspect-ratio: 16 / 9;
+        }
+        .album-head.has-banner .hero-shade { display: none; }
+        .album-head.has-banner .wrap { padding-top: 20px; }
+        .album-head.has-banner h1 { text-shadow: none; }
+        .album-head.has-banner .meta { color: var(--muted); text-shadow: none; }
         footer.site-foot .wrap { justify-content: center; text-align: center; }
     }
     @media (max-width: 520px) {

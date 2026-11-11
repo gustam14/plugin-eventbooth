@@ -115,10 +115,10 @@ foreach (($sessionsData ?? []) as $rowData) {
     </p>
     <?php if (!empty($eventBannerUrl)): ?>
         <img src="<?= e((string) $eventBannerUrl) ?>" alt="Banner galeri event ini"
-             style="width: 100%; max-height: 180px; object-fit: cover; border-radius: 12px; display: block; margin-bottom: 14px;">
+             style="width: 100%; max-height: 180px; object-fit: cover; object-position: center top; border-radius: 12px; display: block; margin-bottom: 14px;">
     <?php elseif (!empty($tenantBannerUrl)): ?>
         <img src="<?= e((string) $tenantBannerUrl) ?>" alt="Banner bawaan tenant"
-             style="width: 100%; max-height: 180px; object-fit: cover; border-radius: 12px; display: block; margin-bottom: 10px; opacity: .8;">
+             style="width: 100%; max-height: 180px; object-fit: cover; object-position: center top; border-radius: 12px; display: block; margin-bottom: 10px; opacity: .8;">
         <p class="hint" style="margin-bottom: 12px;">Saat ini galeri memakai banner bawaan tenant di atas. Unggah banner khusus untuk menggantinya pada event ini saja.</p>
     <?php else: ?>
         <p class="hint" style="margin-bottom: 12px;">Belum ada banner — kepala album tampil polos dengan judul event.</p>

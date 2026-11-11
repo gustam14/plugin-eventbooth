@@ -41,7 +41,7 @@ $waUrl = (string) ($brand['whatsapp_url'] ?? '');
         background: #0A0C0F; border: 1px solid var(--line, #262B33); border-radius: 12px;
         margin-bottom: 16px; overflow: hidden;
     }
-    .brand-banner-preview img { width: 100%; max-height: 170px; object-fit: cover; border-radius: 8px; display: block; }
+    .brand-banner-preview img { width: 100%; max-height: 170px; object-fit: cover; object-position: center top; border-radius: 8px; display: block; }
     .brand-banner-preview .none { color: #9AA3AF; font-size: 13px; }
     .swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     .swatches button {
