@@ -553,24 +553,46 @@ final class Notify
             $sender = strstr($sender, '@', true) ?: $sender;
         }
 
-        $text = null;
+        // Teks bisa tiba di beberapa tempat sekaligus: pesan
+        // teks biasa di 'message', tetapi pesan media/lokasi
+        // (mis. format booking yang dikirim bersama share
+        // lokasi) meletakkan teksnya di caption media. Kumpulkan
+        // semua kandidat lalu pilih yang paling banyak memuat
+        // label booking — cara paling aman menebak field yang
+        // benar antar versi MPWA (v0.36.3, dari uji lapangan:
+        // format terkirim bareng share lokasi tidak terbaca).
+        $candidates = [];
         foreach (['message', 'text', 'body', 'pesan', 'caption'] as $key) {
             if (!isset($data[$key])) {
                 continue;
             }
             if (is_string($data[$key]) && trim($data[$key]) !== '') {
-                $text = $data[$key];
-                break;
+                $candidates[] = $data[$key];
             }
             if (is_array($data[$key])) {
                 $nested = $data[$key]['conversation']
                     ?? $data[$key]['extendedTextMessage']['text']
+                    ?? $data[$key]['caption']
                     ?? $data[$key]['text']
                     ?? null;
                 if (is_string($nested) && trim($nested) !== '') {
-                    $text = $nested;
-                    break;
+                    $candidates[] = $nested;
                 }
+            }
+        }
+        if (isset($data['media']) && is_array($data['media'])) {
+            $mediaCaption = $data['media']['caption'] ?? null;
+            if (is_string($mediaCaption) && trim($mediaCaption) !== '') {
+                $candidates[] = $mediaCaption;
+            }
+        }
+        $text = null;
+        $bestScore = -1;
+        foreach ($candidates as $candidate) {
+            $score = self::parseBookingText($candidate)['labels'];
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $text = $candidate;
             }
         }
 
