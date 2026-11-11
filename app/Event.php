@@ -184,6 +184,19 @@ final class Event
         return $connected[0] ?? null;
     }
 
+    /**
+     * Tempelkan akun Drive ke event (dipakai pemilih otomatis
+     * v0.27.0 saat akun event kosong atau akunnya ditolak Google
+     * dan event belum memiliki folder Drive sama sekali).
+     */
+    public static function assignDriveAccount(PDO $pdo, int $eventId, int $accountId): void
+    {
+        $stmt = $pdo->prepare(
+            'UPDATE events SET drive_account_id = :account WHERE id = :id'
+        );
+        $stmt->execute(['account' => $accountId, 'id' => $eventId]);
+    }
+
     /* -----------------------------------------------------------------
      * Validasi & simpan
      * --------------------------------------------------------------- */

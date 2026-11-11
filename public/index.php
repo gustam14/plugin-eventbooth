@@ -812,6 +812,158 @@ $googleCredentials = static function (PDO $pdo): array {
     return ['client_id' => $clientId, 'secret_cipher' => $secretCipher];
 };
 
+/**
+ * Token Drive untuk satu akun google_accounts; RuntimeException
+ * berpesan ramah pengguna. $ignoreStatus (v0.27.0) dipakai
+ * pemilih otomatis: status tersimpan bisa basi dua arah, jadi
+ * kandidat tetap diuji dengan pertukaran token sungguhan.
+ */
+$driveTokenForAccount = static function (PDO $pdo, int $accountId, bool $ignoreStatus = false) use ($googleCredentials): array {
+    if ($accountId <= 0) {
+        throw new RuntimeException('Event ini belum memiliki akun penyimpanan. Minta admin menugaskan akun Drive pada event ini.');
+    }
+    $account = GoogleAccount::find($pdo, $accountId);
+    if ($account === null
+        || (!$ignoreStatus && (string) ($account['status'] ?? '') !== 'connected')) {
+        throw new RuntimeException('Akun penyimpanan sedang tidak terhubung. Minta admin memeriksa menu Google Drive.');
+    }
+    $creds = $googleCredentials($pdo);
+    $clientSecret = $creds['secret_cipher'] !== null ? Crypto::decrypt($creds['secret_cipher']) : null;
+    $refreshToken = Crypto::decrypt((string) ($account['refresh_token_encrypted'] ?? ''));
+    if ($creds['client_id'] === '' || $clientSecret === null || $clientSecret === ''
+        || $refreshToken === null || $refreshToken === '') {
+        throw new RuntimeException('Kredensial Google Drive belum lengkap di server.');
+    }
+    try {
+        $accessToken = GoogleDrive::accessTokenOrFail($creds['client_id'], $clientSecret, $refreshToken);
+    } catch (GoogleDriveException) {
+        throw new RuntimeException('Koneksi ke Google Drive gagal. Silakan coba lagi.');
+    }
+
+    return [$account, $accessToken];
+};
+
+/**
+ * Pemilih akun Drive OTOMATIS untuk sebuah event (v0.27.0,
+ * diminta pemilik setelah kejadian 11 Nov 2026: akun default
+ * ditolak Google padahal ada akun lain yang sehat, dan event
+ * yang akunnya terhapus tertinggal tanpa akun sama sekali).
+ *
+ * Urutan kandidat: akun event sendiri → akun default → akun
+ * lain menurut urutan kait. Setiap kandidat diuji dengan
+ * pertukaran token sungguhan (status tersimpan tidak dipercaya
+ * mentah-mentah). Pemenang pertama yang lolos dipakai, dan:
+ *  - Bila event belum punya akun (kosong/terhapus): pemenang
+ *    DITEMPELKAN ke event (tersimpan), sesuai permintaan
+ *    pemilik agar penugasan Drive event berjalan otomatis.
+ *  - Bila akun event ditolak Google dan event BELUM memiliki
+ *    folder Drive sama sekali: event dipindahkan ke pemenang
+ *    (tersimpan) — belum ada berkas yang bisa terpisah.
+ *  - Bila event SUDAH memiliki folder di akun lamanya:
+ *    TIDAK dipindah (folder dan berkas album akan terpecah);
+ *    kegagalan token akun aslinya diteruskan apa adanya.
+ * Status akun pemenang yang tercatat 'error' disembuhkan
+ * kembali ke 'connected'; penolakan Google yang jelas
+ * (invalid_grant/dsb.) menandai kandidat 'error'.
+ *
+ * @param array<string, mixed> $event Baris event (id + drive_account_id).
+ * @return array{0: array<string, mixed>, 1: string, 2: array<string, mixed>}
+ * @throws DriveResolutionException
+ */
+$driveTokenForEvent = static function (PDO $pdo, array $event) use ($driveTokenForAccount): array {
+    $eventId = (int) ($event['id'] ?? 0);
+    $currentId = (int) ($event['drive_account_id'] ?? 0);
+
+    $candidateIds = [];
+    if ($currentId > 0) {
+        $candidateIds[] = $currentId;
+    }
+    $default = GoogleAccount::defaultAccount($pdo);
+    if ($default !== null) {
+        $candidateIds[] = (int) $default['id'];
+    }
+    foreach (GoogleAccount::all($pdo) as $row) {
+        $candidateIds[] = (int) $row['id'];
+    }
+    $candidateIds = array_values(array_unique(array_filter(
+        $candidateIds,
+        static fn (int $i): bool => $i > 0
+    )));
+
+    if ($candidateIds === []) {
+        throw new DriveResolutionException(
+            'Event ini belum memiliki akun penyimpanan. Minta admin menugaskan akun Drive pada event ini.',
+            'not_configured'
+        );
+    }
+
+    $winner = null;
+    $winnerToken = null;
+    foreach ($candidateIds as $candidateId) {
+        try {
+            [$candidate, $token] = $driveTokenForAccount($pdo, $candidateId, true);
+            $winner = $candidate;
+            $winnerToken = $token;
+            break;
+        } catch (RuntimeException) {
+            $reason = GoogleDrive::$lastTokenError;
+            if (is_string($reason)
+                && (str_contains($reason, 'invalid_grant')
+                    || str_contains($reason, 'invalid_client')
+                    || str_contains($reason, 'unauthorized_client'))) {
+                try {
+                    GoogleAccount::setStatus($pdo, $candidateId, 'error');
+                } catch (PDOException) {
+                    // Penandaan status bersifat tambahan.
+                }
+            }
+        }
+    }
+
+    if ($winner === null || $winnerToken === null) {
+        throw new DriveResolutionException(
+            'Koneksi ke Google Drive gagal. Silakan coba lagi.',
+            'token_failed'
+        );
+    }
+
+    $winnerId = (int) $winner['id'];
+    if ($winnerId !== $currentId && $eventId > 0) {
+        $hasFolders = false;
+        if ($currentId > 0) {
+            $stmt = $pdo->prepare(
+                "SELECT COUNT(*) FROM sessions
+                  WHERE event_id = :event
+                    AND drive_folder_id IS NOT NULL
+                    AND drive_folder_id <> ''"
+            );
+            $stmt->execute(['event' => $eventId]);
+            $hasFolders = (int) $stmt->fetchColumn() > 0;
+        }
+        if ($currentId > 0 && $hasFolders) {
+            // Folder & berkas event sudah tinggal di akun lama;
+            // beralih akan memecah album — teruskan kegagalan.
+            throw new DriveResolutionException(
+                'Koneksi ke Google Drive gagal. Silakan coba lagi.',
+                'token_failed'
+            );
+        }
+        Event::assignDriveAccount($pdo, $eventId, $winnerId);
+        $event['drive_account_id'] = $winnerId;
+    }
+
+    if ((string) ($winner['status'] ?? '') !== 'connected') {
+        try {
+            GoogleAccount::setStatus($pdo, $winnerId, 'connected');
+            $winner['status'] = 'connected';
+        } catch (PDOException) {
+            // Penyembuhan status bersifat tambahan.
+        }
+    }
+
+    return [$winner, $winnerToken, $event];
+};
+
 $router->get('/admin/drive', static function () use ($googleCredentials): void {
     $user = Auth::requireRole('super_admin');
 
@@ -4565,7 +4717,7 @@ $driveFolderForKind = static function (array $folders, string $kind): string {
  *               3: array<string, mixed>, 4: array<string, mixed>,
  *               5: array<string, mixed>, 6: string}
  */
-$driveContext = static function (array $body) use ($appDeviceContext, $googleCredentials): array {
+$driveContext = static function (array $body) use ($appDeviceContext, $driveTokenForEvent): array {
     [$pdo, $device, $license, $tenant] = $appDeviceContext();
 
     $sessionId = isset($body['session_id']) && is_numeric($body['session_id'])
@@ -4575,57 +4727,38 @@ $driveContext = static function (array $body) use ($appDeviceContext, $googleCre
         Json::error('session_id wajib diisi.', 422, 'invalid_request');
     }
 
-    $session = null;
-    $account = null;
     try {
         $session = Album::sessionWithEvent($pdo, $sessionId);
-        if ($session === null || (int) $session['event_tenant_id'] !== (int) $tenant['id']) {
-            Json::error('Sesi tidak ditemukan.', 404, 'not_found');
-        }
+    } catch (PDOException) {
+        Json::error('Layanan belum siap. Silakan coba lagi.', 503, 'server_error');
+    }
+    if ($session === null || (int) $session['event_tenant_id'] !== (int) $tenant['id']) {
+        Json::error('Sesi tidak ditemukan.', 404, 'not_found');
+    }
 
-        $accountId = $session['event_drive_account_id'] ?? null;
-        if ($accountId === null) {
-            Json::error(
-                'Event ini belum memiliki akun penyimpanan. Minta admin menugaskan akun Drive pada event ini.',
-                503,
-                'drive_not_configured'
-            );
+    // Akun Drive dipilih OTOMATIS (v0.27.0): akun event sendiri
+    // diuji lebih dulu; bila kosong atau tokennya ditolak Google
+    // dan event belum memiliki folder Drive, akun sehat lain
+    // ditempelkan ke event dan dipakai. Kredensial OAuth dan
+    // refresh token tetap hanya dibuka di dalam server.
+    try {
+        [$account, $accessToken] = $driveTokenForEvent($pdo, [
+            'id' => (int) ($session['event_id'] ?? 0),
+            'drive_account_id' => $session['event_drive_account_id'] ?? null,
+        ]);
+    } catch (DriveResolutionException $e) {
+        if ($e->kind === 'not_configured') {
+            Json::error($e->getMessage(), 503, 'drive_not_configured');
         }
-
-        $account = GoogleAccount::find($pdo, (int) $accountId);
-        if ($account === null || (string) ($account['status'] ?? '') !== 'connected') {
-            Json::error(
-                'Akun penyimpanan event ini sedang tidak terhubung. Minta admin memeriksa menu Google Drive.',
-                503,
-                'drive_not_configured'
-            );
-        }
-
-        License::touchLastSeen($pdo, (int) $license['id']);
+        Json::error('Koneksi ke Google Drive gagal. Silakan coba lagi.', 502, 'drive_error');
     } catch (PDOException) {
         Json::error('Layanan belum siap. Silakan coba lagi.', 503, 'server_error');
     }
 
-    // Kredensial OAuth + refresh token didekripsi hanya di sini,
-    // di dalam server — tidak pernah keluar dalam respons apa pun.
-    $creds = $googleCredentials($pdo);
-    $clientSecret = $creds['secret_cipher'] !== null ? Crypto::decrypt($creds['secret_cipher']) : null;
-    $refreshToken = Crypto::decrypt((string) ($account['refresh_token_encrypted'] ?? ''));
-    if ($creds['client_id'] === '' || $clientSecret === null || $refreshToken === null || $refreshToken === '') {
-        Json::error('Kredensial Google Drive belum lengkap di server.', 503, 'drive_not_configured');
-    }
-
     try {
-        $accessToken = GoogleDrive::accessTokenOrFail($creds['client_id'], $clientSecret, $refreshToken);
-    } catch (GoogleDriveException) {
-        // Pola yang sama seperti tes koneksi M3: token ditolak
-        // Google -> tandai akun 'error' agar terlihat Super Admin.
-        try {
-            GoogleAccount::setStatus($pdo, (int) $account['id'], 'error');
-        } catch (PDOException) {
-            // Penandaan status bersifat tambahan; abaikan kegagalannya.
-        }
-        Json::error('Koneksi ke Google Drive gagal. Silakan coba lagi.', 502, 'drive_error');
+        License::touchLastSeen($pdo, (int) $license['id']);
+    } catch (PDOException) {
+        // Sentuhan terakhir bersifat tambahan; abaikan kegagalannya.
     }
 
     return [$pdo, $device, $license, $tenant, $session, $account, $accessToken];
@@ -4879,30 +5012,10 @@ $router->post('/api/drive/complete', static function () use ($readJsonBody, $dri
  * media). Semua rute dibatasi kepemilikan event tenant yang login.
  * ------------------------------------------------------------------- */
 
-/** Token Drive untuk satu akun google_accounts; RuntimeException berpesan ramah pengguna. */
-$driveTokenForAccount = static function (PDO $pdo, int $accountId) use ($googleCredentials): array {
-    if ($accountId <= 0) {
-        throw new RuntimeException('Event ini belum memiliki akun penyimpanan. Minta admin menugaskan akun Drive pada event ini.');
-    }
-    $account = GoogleAccount::find($pdo, $accountId);
-    if ($account === null || (string) ($account['status'] ?? '') !== 'connected') {
-        throw new RuntimeException('Akun penyimpanan sedang tidak terhubung. Minta admin memeriksa menu Google Drive.');
-    }
-    $creds = $googleCredentials($pdo);
-    $clientSecret = $creds['secret_cipher'] !== null ? Crypto::decrypt($creds['secret_cipher']) : null;
-    $refreshToken = Crypto::decrypt((string) ($account['refresh_token_encrypted'] ?? ''));
-    if ($creds['client_id'] === '' || $clientSecret === null || $clientSecret === ''
-        || $refreshToken === null || $refreshToken === '') {
-        throw new RuntimeException('Kredensial Google Drive belum lengkap di server.');
-    }
-    try {
-        $accessToken = GoogleDrive::accessTokenOrFail($creds['client_id'], $clientSecret, $refreshToken);
-    } catch (GoogleDriveException) {
-        throw new RuntimeException('Koneksi ke Google Drive gagal. Silakan coba lagi.');
-    }
-
-    return [$account, $accessToken];
-};
+/* Penukar token Drive ($driveTokenForAccount) dan pemilih akun
+ * otomatis ($driveTokenForEvent) didefinisikan di dekat
+ * $googleCredentials agar dapat dipakai konteks API aplikasi
+ * maupun Kelola Album. */
 
 /** Event milik tenant yang login, atau null (pemanggil mengalihkan). */
 $tenantAlbumEvent = static function (PDO $pdo, int $tenantId, array $params): ?array {
@@ -5913,7 +6026,7 @@ $router->post('/tenant/events/{id}/album/delete-event', static function (array $
 
 $router->post('/tenant/events/{id}/album/upload', static function (array $params) use (
     $tenantAlbumEvent,
-    $driveTokenForAccount,
+    $driveTokenForEvent,
     $ensureSessionFolders,
     $driveFolderForKind
 ): void {
@@ -5974,7 +6087,11 @@ $router->post('/tenant/events/{id}/album/upload', static function (array $params
     }
 
     try {
-        [$account, $accessToken] = $driveTokenForAccount($pdo, (int) ($event['drive_account_id'] ?? 0));
+        // Akun Drive dipilih otomatis (v0.27.0): akun event
+        // sendiri, atau akun sehat yang ditempelkan ke event
+        // bila akunnya kosong/ditolak Google dan event belum
+        // memiliki folder Drive.
+        [$account, $accessToken, $event] = $driveTokenForEvent($pdo, $event);
 
         // Sesi tujuan: sesi yang ada atau sesi manual baru.
         $sessionChoice = is_string($_POST['session_id'] ?? null) ? (string) $_POST['session_id'] : 'new';
