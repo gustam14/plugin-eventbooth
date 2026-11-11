@@ -42,6 +42,7 @@ final class Notify
             'owner_notify_enabled' => true,
             'mpwa_sender' => '',
             'mpwa_api_key_set' => false,
+            'wa_booking_enabled' => false,
         ];
     }
 
@@ -68,6 +69,7 @@ final class Notify
         $settings['client_enabled'] = (int) ($row['client_enabled'] ?? 0) === 1;
         $settings['crew_enabled'] = (int) ($row['crew_enabled'] ?? 0) === 1;
         $settings['crew_reminder_enabled'] = (int) ($row['crew_reminder_enabled'] ?? 0) === 1;
+        $settings['wa_booking_enabled'] = (int) ($row['wa_booking_enabled'] ?? 0) === 1;
         $settings['booking_form_enabled'] = (int) ($row['booking_form_enabled'] ?? 0) === 1;
         $settings['owner_notify_enabled'] = (int) ($row['owner_notify_enabled'] ?? 1) === 1;
         $settings['mpwa_sender'] = isset($row['mpwa_sender']) ? (string) $row['mpwa_sender'] : '';
@@ -96,6 +98,7 @@ final class Notify
             'client_enabled' => isset($input['client_enabled']),
             'crew_enabled' => isset($input['crew_enabled']),
             'crew_reminder_enabled' => isset($input['crew_reminder_enabled']),
+            'wa_booking_enabled' => isset($input['wa_booking_enabled']),
             'booking_form_enabled' => isset($input['booking_form_enabled']),
             'owner_notify_enabled' => isset($input['owner_notify_enabled']),
         ];
@@ -141,11 +144,11 @@ final class Notify
             'INSERT INTO tenant_notifications
                 (tenant_id, share_enabled, share_template, client_enabled, client_template,
                  crew_enabled, crew_template, booking_form_enabled, owner_notify_enabled, mpwa_sender,
-                 crew_reminder_enabled, crew_h1_template, crew_h0_template)
+                 crew_reminder_enabled, crew_h1_template, crew_h0_template, wa_booking_enabled)
              VALUES
                 (:tenant_id, :share_enabled, :share_template, :client_enabled, :client_template,
                  :crew_enabled, :crew_template, :booking_form_enabled, :owner_notify_enabled, :mpwa_sender,
-                 :crew_reminder_enabled, :crew_h1_template, :crew_h0_template)
+                 :crew_reminder_enabled, :crew_h1_template, :crew_h0_template, :wa_booking_enabled)
              ON DUPLICATE KEY UPDATE
                 share_enabled = VALUES(share_enabled),
                 share_template = VALUES(share_template),
@@ -158,7 +161,8 @@ final class Notify
                 mpwa_sender = VALUES(mpwa_sender),
                 crew_reminder_enabled = VALUES(crew_reminder_enabled),
                 crew_h1_template = VALUES(crew_h1_template),
-                crew_h0_template = VALUES(crew_h0_template)'
+                crew_h0_template = VALUES(crew_h0_template),
+                wa_booking_enabled = VALUES(wa_booking_enabled)'
         );
         $stmt->execute([
             'tenant_id' => $tenantId,
@@ -174,6 +178,7 @@ final class Notify
             'crew_reminder_enabled' => !empty($data['crew_reminder_enabled']) ? 1 : 0,
             'crew_h1_template' => $data['crew_h1_template'] ?? null,
             'crew_h0_template' => $data['crew_h0_template'] ?? null,
+            'wa_booking_enabled' => !empty($data['wa_booking_enabled']) ? 1 : 0,
         ]);
     }
 
@@ -441,15 +446,16 @@ final class Notify
     public static function logRequest(PDO $pdo, int $tenantId, array $data): void
     {
         try {
+            $hasSource = array_key_exists('source', $data);
             $stmt = $pdo->prepare(
                 'INSERT INTO booking_requests
                     (tenant_id, client_id, event_id, name, whatsapp, address, event_date, package_name, notes,
-                     event_name, start_time, dp_amount)
+                     event_name, start_time, dp_amount' . ($hasSource ? ', source' : '') . ')
                  VALUES
                     (:tenant_id, :client_id, :event_id, :name, :whatsapp, :address, :event_date, :package_name, :notes,
-                     :event_name, :start_time, :dp_amount)'
+                     :event_name, :start_time, :dp_amount' . ($hasSource ? ', :source' : '') . ')'
             );
-            $stmt->execute([
+            $params = [
                 'tenant_id' => $tenantId,
                 'client_id' => $data['client_id'] ?? null,
                 'event_id' => $data['event_id'] ?? null,
@@ -462,7 +468,11 @@ final class Notify
                 'event_name' => $data['event_name'] ?? null,
                 'start_time' => $data['start_time'] ?? null,
                 'dp_amount' => $data['dp_amount'] ?? null,
-            ]);
+            ];
+            if ($hasSource) {
+                $params['source'] = $data['source'] === 'wa' ? 'wa' : 'web';
+            }
+            $stmt->execute($params);
         } catch (PDOException) {
             // Log bersifat tambahan; abaikan kegagalan.
         }
@@ -502,6 +512,383 @@ final class Notify
             return (int) $stmt->fetchColumn() > 0;
         } catch (PDOException) {
             return false;
+        }
+    }
+
+    /* -----------------------------------------------------------------
+     * Booking via WhatsApp (v0.36.0): MPWA meneruskan pesan
+     * masuk ke POST /api/wa/webhook/{token}; pesan berformat
+     * baku (label Nama/Paket/Tanggal/dll.) diproses otomatis
+     * seperti form booking web.
+     * --------------------------------------------------------------- */
+
+    /** Format kosong yang dibagikan tenant ke calon klien. */
+    public const BOOKING_FORMAT_TEXT = "Booking\n\nNama : \nNo WA : \nPaket : \nNama Acara : \nTanggal : \nJam Mulai : \nDP : \nShare Lokasi : ";
+
+    /**
+     * Ambil pengirim + teks dari payload webhook MPWA yang
+     * bentuknya bisa berbeda antar versi/fork: periksa
+     * nama-nama field yang umum + satu tingkat sarang 'data'.
+     *
+     * @param array<string, mixed> $data
+     * @return array{sender: ?string, text: ?string, isGroup: bool, fromMe: bool}
+     */
+    public static function extractWaMessage(array $data): array
+    {
+        if (isset($data['data']) && is_array($data['data'])) {
+            $data = array_merge($data, $data['data']);
+        }
+
+        $sender = null;
+        foreach (['sender', 'from', 'number', 'pengirim', 'participant', 'chatId'] as $key) {
+            if (isset($data[$key]) && is_scalar($data[$key]) && trim((string) $data[$key]) !== '') {
+                $sender = (string) $data[$key];
+                break;
+            }
+        }
+        if ($sender !== null && str_contains($sender, '@')) {
+            $sender = strstr($sender, '@', true) ?: $sender;
+        }
+
+        $text = null;
+        foreach (['message', 'text', 'body', 'pesan', 'caption'] as $key) {
+            if (!isset($data[$key])) {
+                continue;
+            }
+            if (is_string($data[$key]) && trim($data[$key]) !== '') {
+                $text = $data[$key];
+                break;
+            }
+            if (is_array($data[$key])) {
+                $nested = $data[$key]['conversation']
+                    ?? $data[$key]['extendedTextMessage']['text']
+                    ?? $data[$key]['text']
+                    ?? null;
+                if (is_string($nested) && trim($nested) !== '') {
+                    $text = $nested;
+                    break;
+                }
+            }
+        }
+
+        $isGroup = !empty($data['isGroup']) || !empty($data['is_group'])
+            || (isset($data['from']) && is_string($data['from']) && str_contains($data['from'], '@g.us'))
+            || (isset($data['chatId']) && is_string($data['chatId']) && str_contains($data['chatId'], '@g.us'));
+        $fromMe = !empty($data['fromMe']) || !empty($data['from_me'])
+            || (isset($data['type']) && is_string($data['type']) && stripos($data['type'], 'outgoing') !== false);
+
+        return ['sender' => $sender, 'text' => $text, 'isGroup' => $isGroup, 'fromMe' => $fromMe];
+    }
+
+    /**
+     * Uraikan pesan berformat label menjadi bidang booking.
+     *
+     * @return array{labels: int, nama: string, no_wa: string, paket: string,
+     *               nama_acara: string, tanggal: string, jam: string,
+     *               dp: string, lokasi: string}
+     */
+    public static function parseBookingText(string $text): array
+    {
+        $patterns = [
+            'nama' => '/^\s*nama\s*:\s*(.+?)\s*$/mi',
+            'no_wa' => '/^\s*(?:no\.?\s*)?(?:wa|whatsapp|hp|telepon|telp)\s*:\s*(.+?)\s*$/mi',
+            'paket' => '/^\s*paket\s*:\s*(.+?)\s*$/mi',
+            'nama_acara' => '/^\s*nama\s*acara\s*:\s*(.+?)\s*$/mi',
+            'tanggal' => '/^\s*tanggal(?:\s*acara)?\s*:\s*(.+?)\s*$/mi',
+            'jam' => '/^\s*jam(?:\s*mulai)?\s*:\s*(.+?)\s*$/mi',
+            'dp' => '/^\s*dp\s*:\s*(.+?)\s*$/mi',
+            'lokasi' => '/^\s*(?:share\s+)?lokasi\s*:\s*(.+)$/ims',
+        ];
+        $fields = ['nama' => '', 'no_wa' => '', 'paket' => '', 'nama_acara' => '',
+            'tanggal' => '', 'jam' => '', 'dp' => '', 'lokasi' => ''];
+        $found = 0;
+        foreach ($patterns as $key => $pattern) {
+            if (preg_match($pattern, $text, $m) === 1) {
+                $fields[$key] = trim($m[1]);
+                $found++;
+            }
+        }
+
+        return ['labels' => $found] + $fields;
+    }
+
+    /** Tanggal Indonesia/angka menjadi Y-m-d; null bila tak sah. */
+    public static function parseDateId(string $raw): ?string
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return null;
+        }
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $raw, $m) === 1) {
+            return checkdate((int) $m[2], (int) $m[3], (int) $m[1]) ? $raw : null;
+        }
+        if (preg_match('/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/', $raw, $m) === 1) {
+            return checkdate((int) $m[2], (int) $m[1], (int) $m[3])
+                ? sprintf('%04d-%02d-%02d', (int) $m[3], (int) $m[2], (int) $m[1])
+                : null;
+        }
+        $months = [
+            'januari' => 1, 'februari' => 2, 'maret' => 3, 'april' => 4,
+            'mei' => 5, 'juni' => 6, 'juli' => 7, 'agustus' => 8,
+            'september' => 9, 'oktober' => 10, 'november' => 11,
+            'nopember' => 11, 'desember' => 12,
+            'jan' => 1, 'feb' => 2, 'mar' => 3, 'apr' => 4, 'jun' => 6,
+            'jul' => 7, 'agu' => 8, 'ags' => 8, 'sep' => 9, 'okt' => 10,
+            'nov' => 11, 'des' => 12,
+        ];
+        if (preg_match('/^(\d{1,2})\s+([a-z]+)\.?\s+(\d{4})$/i', $raw, $m) === 1) {
+            $month = $months[strtolower($m[2])] ?? null;
+            if ($month !== null && checkdate($month, (int) $m[1], (int) $m[3])) {
+                return sprintf('%04d-%02d-%02d', (int) $m[3], $month, (int) $m[1]);
+            }
+        }
+
+        return null;
+    }
+
+    /** Jam "09.00" / "09:00" menjadi "HH:MM"; null bila tak sah. */
+    public static function parseTimeId(string $raw): ?string
+    {
+        if (preg_match('/(\d{1,2})[:.](\d{2})/', $raw, $m) !== 1) {
+            return null;
+        }
+        $hour = (int) $m[1];
+        $minute = (int) $m[2];
+        if ($hour > 23 || $minute > 59) {
+            return null;
+        }
+
+        return sprintf('%02d:%02d', $hour, $minute);
+    }
+
+    /** Token webhook tenant; dibuat saat pertama diminta. */
+    public static function ensureWebhookToken(PDO $pdo, int $tenantId): ?string
+    {
+        try {
+            $stmt = $pdo->prepare('SELECT wa_webhook_token FROM tenant_notifications WHERE tenant_id = :t');
+            $stmt->execute(['t' => $tenantId]);
+            $row = $stmt->fetch();
+            if ($row !== false && !empty($row['wa_webhook_token'])) {
+                return (string) $row['wa_webhook_token'];
+            }
+            $token = bin2hex(random_bytes(16));
+            $stmt = $pdo->prepare(
+                'INSERT INTO tenant_notifications (tenant_id, wa_webhook_token) VALUES (:t, :tok)
+                 ON DUPLICATE KEY UPDATE wa_webhook_token = VALUES(wa_webhook_token)'
+            );
+            $stmt->execute(['t' => $tenantId, 'tok' => $token]);
+
+            return $token;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /** Catat setiap webhook yang tiba (diagnosis format MPWA). */
+    public static function logWebhook(PDO $pdo, ?int $tenantId, ?string $sender, bool $matched, string $result, string $rawPayload): void
+    {
+        try {
+            $stmt = $pdo->prepare(
+                'INSERT INTO wa_webhook_logs (tenant_id, sender, matched, result, payload)
+                 VALUES (:t, :s, :m, :r, :p)'
+            );
+            $stmt->execute([
+                't' => $tenantId,
+                's' => $sender !== null ? mb_substr($sender, 0, 64) : null,
+                'm' => $matched ? 1 : 0,
+                'r' => mb_substr($result, 0, 48),
+                'p' => mb_substr($rawPayload, 0, 3000),
+            ]);
+        } catch (Throwable) {
+            // Log bersifat diagnosis; abaikan kegagalan.
+        }
+    }
+
+    /**
+     * Webhook terakhir milik tenant (untuk panel Notifikasi).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public static function webhookLogs(PDO $pdo, int $tenantId, int $limit = 5): array
+    {
+        try {
+            $stmt = $pdo->prepare(
+                'SELECT received_at, sender, matched, result FROM wa_webhook_logs
+                  WHERE tenant_id = :t ORDER BY id DESC LIMIT ' . max(1, min(20, $limit))
+            );
+            $stmt->execute(['t' => $tenantId]);
+
+            return $stmt->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * Proses satu pesan WA masuk menjadi booking (alur yang
+     * sama seperti form booking web) dan kembalikan kode hasil:
+     * ignored | disabled | guidance | guidance_limited |
+     * duplicate | created | error.
+     */
+    public static function processWaBooking(PDO $pdo, int $tenantId, string $senderRaw, string $text): string
+    {
+        try {
+            $settings = self::settings($pdo, $tenantId);
+            if (empty($settings['wa_booking_enabled'])) {
+                return 'disabled';
+            }
+            $tenant = Tenant::find($pdo, $tenantId);
+            if ($tenant === null) {
+                return 'error';
+            }
+
+            $parsed = self::parseBookingText($text);
+            $mentionsBooking = stripos($text, 'booking') !== false;
+            if ($parsed['labels'] < 2 && !$mentionsBooking) {
+                return 'ignored';
+            }
+
+            $date = $parsed['tanggal'] !== '' ? self::parseDateId($parsed['tanggal']) : null;
+            $coreOk = $parsed['nama'] !== '' && $parsed['paket'] !== '' && $date !== null;
+            if (!$coreOk) {
+                // Terlihat seperti niat booking tetapi formatnya
+                // belum terbaca: balas contoh format (maks 1x/jam
+                // per pengirim agar tidak spam).
+                $recent = $pdo->prepare(
+                    "SELECT COUNT(*) FROM wa_webhook_logs
+                      WHERE tenant_id = :t AND sender = :s AND result = 'guidance'
+                        AND received_at > (NOW() - INTERVAL 1 HOUR)"
+                );
+                $recent->execute(['t' => $tenantId, 's' => mb_substr($senderRaw, 0, 64)]);
+                if ((int) $recent->fetchColumn() > 0) {
+                    return 'guidance_limited';
+                }
+                $senderNorm = Whatsapp::normalize($senderRaw);
+                if ($senderNorm !== null) {
+                    $guide = "Halo! Untuk booking, kirim ulang dengan format berikut ya (tinggal isi setelah tanda titik dua):\n\n"
+                        . self::BOOKING_FORMAT_TEXT
+                        . "\n\nContoh tanggal: 11 November 2026 · Contoh jam: 09.00";
+                    Mpwa::sendTextForTenant($pdo, $tenantId, $senderNorm, $guide);
+                }
+
+                return 'guidance';
+            }
+
+            $clientWaRaw = $parsed['no_wa'] !== '' ? $parsed['no_wa'] : $senderRaw;
+            $normalizedWa = Whatsapp::normalize($clientWaRaw) ?? Whatsapp::normalize($senderRaw);
+            if ($normalizedWa === null) {
+                return 'guidance';
+            }
+            if (self::recentDuplicate($pdo, $tenantId, $normalizedWa, $date)) {
+                return 'duplicate';
+            }
+
+            // Paket dicocokkan ke Daftar Paket tenant (nama
+            // ternormalisasi: sama persis atau saling mengandung).
+            $packageName = $parsed['paket'];
+            $packagePrice = null;
+            $normalizeName = static fn (string $v): string => trim((string) preg_replace('/[^a-z0-9]+/', ' ', strtolower($v)));
+            $wanted = $normalizeName($parsed['paket']);
+            foreach (PackageTemplate::forTenant($pdo, $tenantId) as $tpl) {
+                if ((string) ($tpl['status'] ?? 'active') !== 'active') {
+                    continue;
+                }
+                $candidate = $normalizeName((string) $tpl['name']);
+                if ($candidate !== '' && ($candidate === $wanted
+                    || str_contains($wanted, $candidate) || str_contains($candidate, $wanted))) {
+                    $packageName = (string) $tpl['name'];
+                    $packagePrice = (float) $tpl['price'];
+                    break;
+                }
+            }
+
+            // DP: abaikan bila formatnya rusak atau melebihi
+            // harga paket (booking tetap dicatat).
+            $dpAmount = null;
+            if ($parsed['dp'] !== '') {
+                [$dpParsed, $dpError] = PackageTemplate::parseMoney($parsed['dp']);
+                if ($dpError === null && $dpParsed !== null
+                    && ($packagePrice === null || $dpParsed <= $packagePrice)) {
+                    $dpAmount = $dpParsed;
+                }
+            }
+
+            $time = self::parseTimeId($parsed['jam']) ?? '09:00';
+            $venue = $parsed['lokasi'] !== '' ? $parsed['lokasi'] : null;
+
+            // Buku Klien: pakai ulang nomor yang sama, atau buat.
+            $clientId = null;
+            foreach (array_unique([$clientWaRaw, $normalizedWa]) as $candidateWa) {
+                $stmt = $pdo->prepare('SELECT id FROM client_bookings WHERE tenant_id = :t AND whatsapp = :wa LIMIT 1');
+                $stmt->execute(['t' => $tenantId, 'wa' => $candidateWa]);
+                $existing = $stmt->fetch();
+                if ($existing !== false) {
+                    $clientId = (int) $existing['id'];
+                    break;
+                }
+            }
+            if ($clientId === null) {
+                $clientId = ClientBook::create($pdo, $tenantId, [
+                    'client_name' => $parsed['nama'],
+                    'whatsapp' => $clientWaRaw,
+                    'address' => $venue,
+                ]);
+            }
+
+            // Event draf otomatis (pola form booking web).
+            $eventId = null;
+            [$eventData, $eventErrors] = Event::validate($pdo, [
+                'name' => $parsed['nama_acara'] !== '' ? $parsed['nama_acara'] : $parsed['nama'],
+                'slug' => '',
+                'venue' => $venue ?? '',
+                'starts_at' => $date . ' ' . $time,
+                'ends_at' => '',
+                'status' => 'draft',
+                'client_id' => (string) $clientId,
+                'client_package_name' => $packageName,
+                'client_total_price' => $packagePrice !== null ? (string) (int) $packagePrice : '',
+                'client_discount' => '',
+                'client_dp_paid' => $dpAmount !== null ? (string) (int) $dpAmount : '',
+            ], null, $tenantId);
+            if ($eventErrors === []) {
+                $eventId = Event::create($pdo, $tenantId, $eventData);
+            }
+
+            $requestData = [
+                'client_id' => $clientId,
+                'event_id' => $eventId,
+                'name' => $parsed['nama'],
+                'whatsapp' => $clientWaRaw,
+                'address' => $venue,
+                'event_date' => $date,
+                'package_name' => $packageName,
+                'notes' => 'Booking via WhatsApp',
+                'event_name' => $parsed['nama_acara'] !== '' ? $parsed['nama_acara'] : null,
+                'start_time' => $time . ':00',
+                'dp_amount' => $dpAmount,
+                'source' => 'wa',
+            ];
+            self::logRequest($pdo, $tenantId, $requestData);
+            self::notifyOwnerNewBooking($pdo, $tenantId, $requestData);
+
+            // Balasan konfirmasi langsung ke klien di WA.
+            $reply = self::render(
+                "Halo {nama_klien}, terima kasih! Booking kamu sudah kami terima & tercatat:\n\nAcara: *{nama_event}*\nTanggal: {tanggal}\nJam mulai: {jam}\nPaket: {nama_paket}\nDP tercatat: {dp}\n\nTim {nama_vendor} akan menghubungimu untuk konfirmasi selanjutnya.",
+                [
+                    'nama_klien' => $parsed['nama'],
+                    'nama_event' => $parsed['nama_acara'] !== '' ? $parsed['nama_acara'] : $parsed['nama'],
+                    'tanggal' => License::formatDateId($date),
+                    'jam' => str_replace(':', '.', $time),
+                    'nama_paket' => $packageName,
+                    'dp' => $dpAmount !== null ? Package::formatPrice($dpAmount) : '—',
+                    'nama_vendor' => Tenant::displayName($tenant),
+                ]
+            );
+            Mpwa::sendTextForTenant($pdo, $tenantId, $normalizedWa, $reply);
+
+            return 'created';
+        } catch (Throwable) {
+            return 'error';
         }
     }
 

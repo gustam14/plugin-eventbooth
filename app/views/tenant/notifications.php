@@ -37,7 +37,7 @@ $s = $settings ?? Notify::defaults();
     <div class="panel-box">
         <p>Fitur ini belum aktif di database. Jalankan berkas-berkas migrasi terbaru
             (<strong>2026-11-11-notifications.sql</strong>, <strong>2026-11-11-tenant-mpwa.sql</strong>,
-            <strong>2026-11-11-crew-reminders.sql</strong>)
+            <strong>2026-11-11-crew-reminders.sql</strong>, <strong>2026-11-11-wa-booking.sql</strong>)
             sekali di phpMyAdmin pada database plugin, lalu muat ulang halaman ini.</p>
     </div>
 <?php else: ?>
@@ -163,6 +163,49 @@ $s = $settings ?? Notify::defaults();
             <?php endif; ?>
         </fieldset>
 
+        <fieldset>
+            <legend>5 · Booking via WhatsApp</legend>
+            <label class="check">
+                <input type="checkbox" name="wa_booking_enabled" value="1" <?= !empty($s['wa_booking_enabled']) ? 'checked' : '' ?> <?= $isAdmin ? '' : 'disabled' ?>>
+                Terima booking dari pesan WhatsApp (webhook MPWA)
+            </label>
+            <div class="hint">Calon klien mengirim pesan berformat baku ke nomor WhatsApp-mu; booking otomatis tercatat (Buku Klien + event Draf + notifikasi ke kamu) dan klien menerima balasan konfirmasi. Pesan biasa yang tidak berformat <strong>diabaikan diam-diam</strong> — percakapan normal tidak terganggu. Pesan yang menyebut "booking" tetapi formatnya belum terbaca akan dibalas contoh format (maksimal 1x per jam per nomor).</div>
+            <?php if (!empty($webhookUrl)): ?>
+                <div class="field" style="margin-top: 10px;">
+                    <label>URL Webhook MPWA kamu</label>
+                    <input type="text" readonly value="<?= e((string) $webhookUrl) ?>" onclick="this.select();">
+                    <div class="hint">Tempel URL ini pada pengaturan <strong>Webhook</strong> perangkatmu di panel MPWA (wa.eventbooth.id). URL ini rahasia — jangan dibagikan ke siapa pun.</div>
+                </div>
+            <?php else: ?>
+                <div class="flash flash-info" style="margin-top: 10px;">URL webhook belum tersedia — jalankan migrasi terbaru (2026-11-11-wa-booking.sql) lalu muat ulang halaman ini.</div>
+            <?php endif; ?>
+            <div class="field" style="margin-top: 10px;">
+                <label>Format pesan untuk calon klien (salin &amp; bagikan)</label>
+                <textarea readonly rows="10" onclick="this.select();"><?= e((string) ($bookingFormatText ?? '')) ?></textarea>
+                <div class="hint">Bagikan format ini di Instagram / status WhatsApp / brosur — calon klien tinggal mengisi setelah tanda titik dua lalu mengirimnya ke nomormu.</div>
+            </div>
+            <?php if (($webhookLogs ?? []) !== []): ?>
+                <div class="field" style="margin-top: 10px;">
+                    <label>Webhook terakhir diterima</label>
+                    <div class="table-wrap">
+                        <table>
+                            <thead><tr><th>Waktu</th><th>Pengirim</th><th>Hasil</th></tr></thead>
+                            <tbody>
+                            <?php foreach ($webhookLogs as $log): ?>
+                                <tr>
+                                    <td><?= e((string) ($log['received_at'] ?? '')) ?></td>
+                                    <td><?= e((string) ($log['sender'] ?? '—')) ?></td>
+                                    <td><?= e((string) ($log['result'] ?? '')) ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="hint">Hasil "created" berarti booking berhasil tercatat; "ignored" berarti pesan biasa yang memang tidak diproses.</div>
+                </div>
+            <?php endif; ?>
+        </fieldset>
+
         <?php if ($isAdmin): ?>
             <div class="form-actions">
                 <button class="btn btn-primary" type="submit">Simpan Pengaturan</button>
@@ -233,7 +276,7 @@ $s = $settings ?? Notify::defaults();
             <?php foreach ($requests as $request): ?>
                 <tr>
                     <td><?= e(License::formatDateId((string) ($request['created_at'] ?? ''))) ?></td>
-                    <td><strong><?= e((string) $request['name']) ?></strong></td>
+                    <td><strong><?= e((string) $request['name']) ?></strong><?= ($request['source'] ?? 'web') === 'wa' ? ' <span class="badge">via WA</span>' : '' ?></td>
                     <td><?= e((string) ($request['whatsapp'] ?? '—')) ?></td>
                     <td><?= e((string) ($request['event_name'] ?? '—')) ?></td>
                     <td><?= !empty($request['event_date']) ? e(License::formatDateId((string) $request['event_date'])) : '—' ?><?= !empty($request['start_time']) ? ' · ' . e(substr((string) $request['start_time'], 0, 5)) : '' ?></td>

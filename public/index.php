@@ -3463,6 +3463,8 @@ $router->get('/tenant/notifications', static function (): void {
     $gatewayReady = false;
     $tablesMissing = false;
     $tenant = null;
+    $webhookUrl = null;
+    $webhookLogs = [];
     $pdo = Database::pdo();
     $tenantId = $user['tenant_id'];
     if ($pdo !== null && $tenantId !== null) {
@@ -3474,6 +3476,12 @@ $router->get('/tenant/notifications', static function (): void {
             $gatewayReady = Mpwa::tenantGatewayReady($pdo, (int) $tenantId);
             // Migrasi belum jalan bila tabel pengaturan tidak ada.
             $pdo->query('SELECT 1 FROM tenant_notifications LIMIT 1');
+            // URL webhook MPWA milik tenant (booking via WA).
+            $webhookToken = Notify::ensureWebhookToken($pdo, (int) $tenantId);
+            if ($webhookToken !== null) {
+                $webhookUrl = Config::appUrl() . '/api/wa/webhook/' . $webhookToken;
+            }
+            $webhookLogs = Notify::webhookLogs($pdo, (int) $tenantId);
         } catch (PDOException) {
             $tablesMissing = true;
         }
@@ -3505,6 +3513,9 @@ $router->get('/tenant/notifications', static function (): void {
             ? Config::appUrl() . '/booking/' . (string) $tenant['slug']
             : null,
         'appUrl' => Config::appUrl(),
+        'webhookUrl' => $webhookUrl,
+        'webhookLogs' => $webhookLogs,
+        'bookingFormatText' => Notify::BOOKING_FORMAT_TEXT,
     ]);
 });
 
@@ -3873,6 +3884,66 @@ $router->post('/booking/{slug}', static function (array $params): void {
     }
 
     $renderForm($values, [], true);
+});
+
+// ---------------------------------------------------------------------
+// Webhook MPWA — booking via pesan WhatsApp (v0.36.0). MPWA
+// meneruskan setiap pesan masuk pada nomor tenant ke URL ini
+// (token rahasia per tenant pada path). Pesan berformat baku
+// diproses Notify::processWaBooking; pesan lain diabaikan
+// diam-diam agar percakapan biasa tidak terganggu. Semua
+// kedatangan dicatat di wa_webhook_logs untuk diagnosis.
+// ---------------------------------------------------------------------
+$router->post('/api/wa/webhook/{token}', static function (array $params): void {
+    $pdo = Database::pdo();
+    if ($pdo === null) {
+        Json::error('Server belum dikonfigurasi.', 503, 'server_not_configured');
+    }
+
+    $token = (string) ($params['token'] ?? '');
+    $tenantId = null;
+    try {
+        $stmt = $pdo->prepare(
+            "SELECT tenant_id FROM tenant_notifications
+              WHERE wa_webhook_token = :tok AND wa_webhook_token <> '' LIMIT 1"
+        );
+        $stmt->execute(['tok' => $token]);
+        $row = $stmt->fetch();
+        $tenantId = $row !== false ? (int) $row['tenant_id'] : null;
+    } catch (PDOException) {
+        $tenantId = null;
+    }
+    if ($tenantId === null) {
+        Json::error('Tidak ditemukan.', 404, 'not_found');
+    }
+
+    $raw = (string) (file_get_contents('php://input') ?: '');
+    $data = json_decode($raw, true);
+    if (!is_array($data)) {
+        parse_str($raw, $parsedForm);
+        $data = is_array($parsedForm) ? $parsedForm : [];
+    }
+    if ($_POST !== []) {
+        $data = array_merge($data, $_POST);
+    }
+
+    $message = Notify::extractWaMessage($data);
+    $result = 'ignored';
+    if ($message['fromMe'] || $message['isGroup']) {
+        $result = 'ignored_self_or_group';
+    } elseif ($message['sender'] !== null && $message['text'] !== null) {
+        $result = Notify::processWaBooking($pdo, $tenantId, $message['sender'], $message['text']);
+    }
+    Notify::logWebhook(
+        $pdo,
+        $tenantId,
+        $message['sender'],
+        !in_array($result, ['ignored', 'ignored_self_or_group'], true),
+        $result,
+        $raw !== '' ? $raw : (string) json_encode($data)
+    );
+
+    Json::respond(['status' => 'ok', 'result' => $result]);
 });
 
 /* ---------------------------------------------------------------------

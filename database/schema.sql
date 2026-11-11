@@ -358,6 +358,8 @@ CREATE TABLE tenant_notifications (
     crew_reminder_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Pengingat kru H-1 & hari-H pukul 06.00 aktif (v0.35.0)',
     crew_h1_template     TEXT NULL COMMENT 'Template pengingat kru H-1; NULL = bawaan (v0.35.0)',
     crew_h0_template     TEXT NULL COMMENT 'Template pengingat kru hari-H; NULL = bawaan (v0.35.0)',
+    wa_booking_enabled   TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Terima booking via pesan WhatsApp (v0.36.0)',
+    wa_webhook_token     VARCHAR(64) NULL COMMENT 'Token rahasia URL webhook MPWA tenant (v0.36.0)',
     created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (tenant_id),
@@ -391,6 +393,7 @@ CREATE TABLE booking_requests (
     event_name   VARCHAR(160) NULL COMMENT 'Nama acara dari form booking (v0.34.0)',
     start_time   TIME NULL COMMENT 'Jam mulai acara dari form booking (v0.34.0)',
     dp_amount    DECIMAL(12,2) NULL COMMENT 'DP yang diisi calon klien di form booking (v0.34.0)',
+    source       ENUM('web','wa') NOT NULL DEFAULT 'web' COMMENT 'Asal booking: form web atau pesan WhatsApp (v0.36.0)',
     created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     KEY idx_booking_requests_tenant (tenant_id),
@@ -399,6 +402,18 @@ CREATE TABLE booking_requests (
     CONSTRAINT fk_booking_requests_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
     CONSTRAINT fk_booking_requests_client FOREIGN KEY (client_id) REFERENCES client_bookings (id) ON DELETE SET NULL,
     CONSTRAINT fk_booking_requests_event FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE wa_webhook_logs (
+    id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    tenant_id   BIGINT UNSIGNED NULL,
+    sender      VARCHAR(64) NULL,
+    matched     TINYINT(1) NOT NULL DEFAULT 0,
+    result      VARCHAR(48) NULL,
+    payload     TEXT NULL COMMENT 'Isi mentah webhook (dipotong) untuk diagnosis format MPWA',
+    received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_wa_webhook_logs_tenant (tenant_id, received_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
