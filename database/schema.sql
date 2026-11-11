@@ -264,22 +264,22 @@ CREATE TABLE packages (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
--- Fitur operasional tenant (v0.28.0): katalog paket tingkat tenant,
--- kru + penugasannya, dan buku klien. Skema sama persis dengan
--- database/migrations/2026-11-11-tenant-ops.sql.
+-- Fitur operasional tenant (v0.28.0/v0.29.0): paket layanan klien
+-- (Daftar Paket), kru + penugasannya, dan buku klien. Skema sama
+-- persis dengan database/migrations/2026-11-11-tenant-ops.sql.
 -- ---------------------------------------------------------------------
 CREATE TABLE package_templates (
-    id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    tenant_id        BIGINT UNSIGNED NOT NULL,
-    name             VARCHAR(120) NOT NULL,
-    timer_mode       ENUM('per_session','per_duration','combined') NOT NULL DEFAULT 'per_session',
-    session_count    INT NULL COMMENT 'Jumlah sesi foto (mode per_session/combined)',
-    duration_minutes INT NULL COMMENT 'Durasi menit (mode per_duration/combined)',
-    price            DECIMAL(12,2) NOT NULL DEFAULT 0,
-    is_active        TINYINT(1) NOT NULL DEFAULT 1,
-    sort_order       INT NOT NULL DEFAULT 0,
-    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    tenant_id      BIGINT UNSIGNED NOT NULL,
+    name           VARCHAR(120) NOT NULL,
+    duration_hours DECIMAL(4,1) NULL COMMENT 'Lama layanan booth di acara (jam); NULL = tidak dibatasi jam',
+    prints_included INT NULL COMMENT 'Jumlah foto/cetakan termasuk; NULL = tanpa batas (unlimited)',
+    description    TEXT NULL COMMENT 'Isi / fasilitas paket (backdrop, properti, bingkai custom, dsb.)',
+    price          DECIMAL(12,2) NOT NULL DEFAULT 0,
+    is_active      TINYINT(1) NOT NULL DEFAULT 1,
+    sort_order     INT NOT NULL DEFAULT 0,
+    created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     KEY idx_package_templates_tenant (tenant_id),
     CONSTRAINT fk_package_templates_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE

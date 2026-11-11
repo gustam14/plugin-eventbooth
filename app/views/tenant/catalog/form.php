@@ -1,7 +1,6 @@
 <?php
 /**
- * Formulir buat/ubah paket katalog tenant (v0.28.0).
- * Sama seperti formulir paket event, tanpa pilihan event induk.
+ * Formulir buat/ubah paket layanan klien (v0.29.0).
  *
  * @var string $appName
  * @var array{id: int, tenant_id: ?int, name: string, email: string, role: string} $user
@@ -22,7 +21,7 @@ $err = static function (string $field) use ($errors): string {
         : '';
 };
 ?>
-<p class="sub">Paket katalog adalah cetakan — setelah disimpan, salin ke event dari halaman Daftar Paket.</p>
+<p class="sub">Paket layanan untuk klien event / wedding. Nama paket ini dapat dipilih saat mencatat klien di Buku Klien.</p>
 
 <div class="panel-box form-panel">
     <form method="post" action="<?= e($action) ?>">
@@ -31,45 +30,46 @@ $err = static function (string $field) use ($errors): string {
         <div class="field">
             <label for="name">Nama Paket</label>
             <input type="text" id="name" name="name" maxlength="120" required
+                   placeholder="cth. Limited 400 Foto / Unlimited 3 Jam / Paket Sekolah"
                    value="<?= e((string) ($values['name'] ?? '')) ?>">
             <?= $err('name') ?>
         </div>
 
         <div class="form-grid">
             <div class="field">
-                <label for="timer_mode">Mode Timer</label>
-                <select id="timer_mode" name="timer_mode">
-                    <?php foreach (Package::TIMER_MODES as $modeValue => $modeLabel): ?>
-                        <option value="<?= e($modeValue) ?>"<?= (string) ($values['timer_mode'] ?? 'per_session') === $modeValue ? ' selected' : '' ?>>
-                            <?= e($modeLabel) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <div class="hint">Per Sesi = dibatasi jumlah sesi foto. Per Durasi = dibatasi menit. Gabungan = keduanya.</div>
-                <?= $err('timer_mode') ?>
+                <label for="duration_hours">Durasi Layanan (jam)</label>
+                <input type="text" id="duration_hours" name="duration_hours" inputmode="decimal"
+                       placeholder="cth. 3 atau 2,5"
+                       value="<?= e((string) ($values['duration_hours'] ?? '')) ?>">
+                <div class="hint">Lama booth beroperasi di acara. Kosongkan bila tidak dibatasi jam.</div>
+                <?= $err('duration_hours') ?>
             </div>
             <div class="field">
-                <label for="price">Harga (Rp)</label>
-                <input type="text" id="price" name="price" inputmode="numeric" required
-                       value="<?= e((string) ($values['price'] ?? '')) ?>">
-                <div class="hint">Contoh: 2500000 atau 2.500.000. Isi 0 untuk paket gratis.</div>
-                <?= $err('price') ?>
+                <label for="prints_included">Jumlah Foto / Cetakan Termasuk</label>
+                <input type="number" id="prints_included" name="prints_included" min="0" step="1"
+                       placeholder="cth. 400"
+                       value="<?= e((string) ($values['prints_included'] ?? '')) ?>">
+                <div class="hint">Kosongkan bila tanpa batas (unlimited).</div>
+                <?= $err('prints_included') ?>
             </div>
         </div>
 
+        <div class="field">
+            <label for="price">Harga Paket (Rp)</label>
+            <input type="text" id="price" name="price" inputmode="numeric" required
+                   value="<?= e((string) ($values['price'] ?? '')) ?>">
+            <div class="hint">Harga total untuk klien. Contoh: 2500000 atau 2.500.000.</div>
+            <?= $err('price') ?>
+        </div>
+
+        <div class="field">
+            <label for="description">Isi / Fasilitas Paket</label>
+            <textarea id="description" name="description" rows="3"
+                      placeholder="cth. Backdrop standar, properti foto, bingkai custom nama pasangan, semua softcopy via galeri online, 1 operator standby"><?= e((string) ($values['description'] ?? '')) ?></textarea>
+            <?= $err('description') ?>
+        </div>
+
         <div class="form-grid">
-            <div class="field">
-                <label for="session_count">Jumlah Sesi <span class="hint">(mode Per Sesi / Gabungan)</span></label>
-                <input type="number" id="session_count" name="session_count" min="0" step="1"
-                       value="<?= e((string) ($values['session_count'] ?? '')) ?>">
-                <?= $err('session_count') ?>
-            </div>
-            <div class="field">
-                <label for="duration_minutes">Durasi (menit) <span class="hint">(mode Per Durasi / Gabungan)</span></label>
-                <input type="number" id="duration_minutes" name="duration_minutes" min="0" step="1"
-                       value="<?= e((string) ($values['duration_minutes'] ?? '')) ?>">
-                <?= $err('duration_minutes') ?>
-            </div>
             <div class="field">
                 <label for="sort_order">Urutan Tampil</label>
                 <input type="number" id="sort_order" name="sort_order" step="1"
@@ -81,7 +81,7 @@ $err = static function (string $field) use ($errors): string {
         <label class="check">
             <input type="checkbox" name="is_active" value="1"
                 <?= !empty($values['is_active']) ? 'checked' : '' ?>>
-            Paket aktif (salinannya ditawarkan ke aplikasi booth)
+            Paket aktif (ditawarkan ke klien &amp; dapat dipilih di Buku Klien)
         </label>
 
         <div class="form-actions">

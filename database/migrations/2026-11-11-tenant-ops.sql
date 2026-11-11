@@ -1,8 +1,11 @@
 -- ---------------------------------------------------------------------
--- Fitur operasional tenant (v0.28.0, diminta pemilik 11 Nov 2026):
---   1. package_templates — Daftar Paket: katalog paket tingkat
---      tenant (nama, durasi, harga) yang dapat disalin ke event
---      mana pun, agar paket yang sama tidak dibuat berulang kali.
+-- Fitur operasional tenant (v0.28.0, bentuk paket disesuaikan
+-- v0.29.0 atas penegasan pemilik 11 Nov 2026):
+--   1. package_templates — Daftar Paket: paket LAYANAN untuk
+--      klien event/wedding (nama, durasi layanan, foto termasuk,
+--      isi paket, harga). BERBEDA dari Paket Sesi (tabel
+--      `packages`) yang dipakai tamu pada booth self-photo /
+--      photobox mandiri.
 --   2. crew_members + event_crew — Manajemen Kru: daftar kru
 --      tenant dan penugasannya per event.
 --   3. client_bookings — Buku Klien: catatan klien & booking
@@ -11,17 +14,17 @@
 -- ---------------------------------------------------------------------
 
 CREATE TABLE package_templates (
-    id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    tenant_id        BIGINT UNSIGNED NOT NULL,
-    name             VARCHAR(120) NOT NULL,
-    timer_mode       ENUM('per_session','per_duration','combined') NOT NULL DEFAULT 'per_session',
-    session_count    INT NULL COMMENT 'Jumlah sesi foto (mode per_session/combined)',
-    duration_minutes INT NULL COMMENT 'Durasi menit (mode per_duration/combined)',
-    price            DECIMAL(12,2) NOT NULL DEFAULT 0,
-    is_active        TINYINT(1) NOT NULL DEFAULT 1,
-    sort_order       INT NOT NULL DEFAULT 0,
-    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    tenant_id      BIGINT UNSIGNED NOT NULL,
+    name           VARCHAR(120) NOT NULL,
+    duration_hours DECIMAL(4,1) NULL COMMENT 'Lama layanan booth di acara (jam); NULL = tidak dibatasi jam',
+    prints_included INT NULL COMMENT 'Jumlah foto/cetakan termasuk; NULL = tanpa batas (unlimited)',
+    description    TEXT NULL COMMENT 'Isi / fasilitas paket (backdrop, properti, bingkai custom, dsb.)',
+    price          DECIMAL(12,2) NOT NULL DEFAULT 0,
+    is_active      TINYINT(1) NOT NULL DEFAULT 1,
+    sort_order     INT NOT NULL DEFAULT 0,
+    created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     KEY idx_package_templates_tenant (tenant_id),
     CONSTRAINT fk_package_templates_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE

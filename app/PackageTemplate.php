@@ -2,13 +2,20 @@
 declare(strict_types=1);
 
 /**
- * Katalog paket tingkat tenant (tabel `package_templates`,
- * v0.28.0) — "Daftar Paket": cetakan paket (nama, mode timer,
- * durasi/sesi, harga) yang dipakai berulang lintas event.
- * Menyalin katalog ke sebuah event membuat baris `packages`
- * biasa pada event itu (yang dibaca aplikasi booth), sehingga
- * perubahan katalog sesudahnya tidak mengubah paket event
- * yang sudah berjalan.
+ * Daftar Paket — paket LAYANAN untuk klien event/wedding
+ * (tabel `package_templates`, v0.28.0; bentuk disesuaikan
+ * v0.29.0 atas penegasan pemilik 11 Nov 2026).
+ *
+ * Paket ini BERBEDA dari Paket Sesi (tabel `packages`):
+ *   - Daftar Paket = penawaran jasa ke klien acara — nama
+ *     paket, durasi layanan (jam), foto/cetakan termasuk,
+ *     isi/fasilitas, dan harga total untuk klien.
+ *   - Paket Sesi = paket yang dipilih tamu pada booth
+ *     self-photo / photobox mandiri (mode timer & harga
+ *     per sesi).
+ * Nama paket pada Buku Klien dapat dipilih dari daftar ini
+ * (tetap disimpan sebagai teks pada catatan booking, agar
+ * perubahan katalog tidak mengubah kesepakatan lama).
  */
 final class PackageTemplate
 {
@@ -43,9 +50,30 @@ final class PackageTemplate
         return $row === false ? null : $row;
     }
 
+    /**
+     * Nama-nama paket aktif tenant — pilihan pada formulir
+     * Buku Klien.
+     *
+     * @return array<int, string>
+     */
+    public static function names(PDO $pdo, int $tenantId): array
+    {
+        $stmt = $pdo->prepare(
+            'SELECT name FROM package_templates
+              WHERE tenant_id = :tenant_id AND is_active = 1
+              ORDER BY sort_order ASC, id ASC'
+        );
+        $stmt->execute(['tenant_id' => $tenantId]);
+        $names = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $names[] = (string) $row['name'];
+        }
+
+        return $names;
+    }
+
     /* -----------------------------------------------------------------
-     * Validasi & simpan — pola yang sama dengan Package::validate()
-     * dikurangi event induk.
+     * Validasi & simpan
      * --------------------------------------------------------------- */
 
     /**
@@ -65,33 +93,31 @@ final class PackageTemplate
         }
         $data['name'] = $name;
 
-        $mode = (string) ($input['timer_mode'] ?? 'per_session');
-        if (!isset(Package::TIMER_MODES[$mode])) {
-            $errors['timer_mode'] = 'Mode timer tidak sah.';
-            $mode = 'per_session';
+        // Durasi layanan dalam jam (boleh pecahan: 2,5 jam).
+        $durationRaw = trim((string) ($input['duration_hours'] ?? ''));
+        $durationRaw = str_replace(',', '.', $durationRaw);
+        if ($durationRaw === '') {
+            $data['duration_hours'] = null;
+        } elseif (is_numeric($durationRaw) && (float) $durationRaw > 0 && (float) $durationRaw <= 999.9) {
+            $data['duration_hours'] = number_format((float) $durationRaw, 1, '.', '');
+        } else {
+            $errors['duration_hours'] = 'Durasi harus berupa angka jam lebih dari 0 (mis. 3 atau 2,5).';
+            $data['duration_hours'] = null;
         }
-        $data['timer_mode'] = $mode;
 
-        [$sessionCount, $sessionError] = self::nullableInt($input['session_count'] ?? null);
-        if ($sessionError !== null) {
-            $errors['session_count'] = 'Jumlah sesi ' . $sessionError;
+        // Jumlah foto/cetakan termasuk (kosong = unlimited).
+        $printsRaw = trim((string) ($input['prints_included'] ?? ''));
+        if ($printsRaw === '') {
+            $data['prints_included'] = null;
+        } elseif (preg_match('/^\d+$/', $printsRaw) === 1 && (int) $printsRaw >= 1) {
+            $data['prints_included'] = (int) $printsRaw;
+        } else {
+            $errors['prints_included'] = 'Jumlah foto harus berupa bilangan bulat 1 atau lebih, atau kosongkan untuk unlimited.';
+            $data['prints_included'] = null;
         }
-        [$duration, $durationError] = self::nullableInt($input['duration_minutes'] ?? null);
-        if ($durationError !== null) {
-            $errors['duration_minutes'] = 'Durasi ' . $durationError;
-        }
-        if (($mode === 'per_session' || $mode === 'combined')
-            && ($sessionCount === null || $sessionCount < 1)
-            && !isset($errors['session_count'])) {
-            $errors['session_count'] = 'Jumlah sesi wajib diisi (minimal 1) untuk mode ini.';
-        }
-        if (($mode === 'per_duration' || $mode === 'combined')
-            && ($duration === null || $duration < 1)
-            && !isset($errors['duration_minutes'])) {
-            $errors['duration_minutes'] = 'Durasi wajib diisi (minimal 1 menit) untuk mode ini.';
-        }
-        $data['session_count'] = $sessionCount;
-        $data['duration_minutes'] = $duration;
+
+        $description = trim((string) ($input['description'] ?? ''));
+        $data['description'] = $description !== '' ? $description : null;
 
         [$price, $priceError] = self::parseMoney($input['price'] ?? null);
         if ($priceError !== null) {
@@ -119,18 +145,18 @@ final class PackageTemplate
     {
         $stmt = $pdo->prepare(
             'INSERT INTO package_templates
-                (tenant_id, name, timer_mode, session_count,
-                 duration_minutes, price, is_active, sort_order)
+                (tenant_id, name, duration_hours, prints_included,
+                 description, price, is_active, sort_order)
              VALUES
-                (:tenant_id, :name, :timer_mode, :session_count,
-                 :duration_minutes, :price, :is_active, :sort_order)'
+                (:tenant_id, :name, :duration_hours, :prints_included,
+                 :description, :price, :is_active, :sort_order)'
         );
         $stmt->execute([
             'tenant_id' => $tenantId,
             'name' => $data['name'],
-            'timer_mode' => $data['timer_mode'],
-            'session_count' => $data['session_count'],
-            'duration_minutes' => $data['duration_minutes'],
+            'duration_hours' => $data['duration_hours'],
+            'prints_included' => $data['prints_included'],
+            'description' => $data['description'],
             'price' => $data['price'],
             'is_active' => $data['is_active'],
             'sort_order' => $data['sort_order'],
@@ -144,18 +170,17 @@ final class PackageTemplate
     {
         $stmt = $pdo->prepare(
             'UPDATE package_templates
-                SET name = :name, timer_mode = :timer_mode,
-                    session_count = :session_count,
-                    duration_minutes = :duration_minutes,
-                    price = :price, is_active = :is_active,
-                    sort_order = :sort_order
+                SET name = :name, duration_hours = :duration_hours,
+                    prints_included = :prints_included,
+                    description = :description, price = :price,
+                    is_active = :is_active, sort_order = :sort_order
               WHERE id = :id'
         );
         $stmt->execute([
             'name' => $data['name'],
-            'timer_mode' => $data['timer_mode'],
-            'session_count' => $data['session_count'],
-            'duration_minutes' => $data['duration_minutes'],
+            'duration_hours' => $data['duration_hours'],
+            'prints_included' => $data['prints_included'],
+            'description' => $data['description'],
             'price' => $data['price'],
             'is_active' => $data['is_active'],
             'sort_order' => $data['sort_order'],
@@ -171,31 +196,34 @@ final class PackageTemplate
         $stmt->execute(['id' => $id, 'tenant_id' => $tenantId]);
     }
 
-    /**
-     * Salin katalog ini menjadi paket sungguhan pada sebuah
-     * event milik tenant yang sama.
-     *
-     * @param array<string, mixed> $template Baris package_templates.
-     * @return int ID paket baru pada event.
-     */
-    public static function applyToEvent(PDO $pdo, array $template, int $eventId): int
+    /* -----------------------------------------------------------------
+     * Tampilan
+     * --------------------------------------------------------------- */
+
+    /** Durasi layanan -> "3 jam" / "2,5 jam" / "Tanpa batas jam". */
+    public static function formatDuration(mixed $hours): string
     {
-        return Package::create($pdo, [
-            'event_id' => $eventId,
-            'name' => (string) $template['name'],
-            'timer_mode' => (string) $template['timer_mode'],
-            'session_count' => ($template['session_count'] ?? null) !== null
-                ? (int) $template['session_count'] : null,
-            'duration_minutes' => ($template['duration_minutes'] ?? null) !== null
-                ? (int) $template['duration_minutes'] : null,
-            'price' => (string) ($template['price'] ?? '0.00'),
-            'is_active' => (int) ($template['is_active'] ?? 1),
-            'sort_order' => (int) ($template['sort_order'] ?? 0),
-        ]);
+        if ($hours === null || $hours === '') {
+            return 'Tanpa batas jam';
+        }
+        $text = number_format((float) $hours, 1, ',', '.');
+        $text = rtrim(rtrim($text, '0'), ',');
+
+        return $text . ' jam';
+    }
+
+    /** Foto termasuk -> "400 foto" / "Unlimited". */
+    public static function formatPrints(mixed $prints): string
+    {
+        if ($prints === null || $prints === '') {
+            return 'Unlimited';
+        }
+
+        return number_format((int) $prints, 0, ',', '.') . ' foto';
     }
 
     /**
-     * Nilai tampilan formulir katalog.
+     * Nilai tampilan formulir daftar paket.
      *
      * @param array<string, mixed>|null $template
      * @param array<string, mixed>|null $post
@@ -203,34 +231,54 @@ final class PackageTemplate
      */
     public static function formValues(?array $template = null, ?array $post = null): array
     {
-        // Bentuk nilainya sama dengan formulir paket event.
-        return Package::formValues($template, $post);
-    }
+        $values = [
+            'name' => '',
+            'duration_hours' => '',
+            'prints_included' => '',
+            'description' => '',
+            'price' => '',
+            'sort_order' => '0',
+            'is_active' => true,
+        ];
 
-    /* -----------------------------------------------------------------
-     * Helper internal (pola sama seperti Package)
-     * --------------------------------------------------------------- */
-
-    /** @return array{0: ?int, 1: ?string} */
-    private static function nullableInt(mixed $raw): array
-    {
-        if ($raw === null) {
-            return [null, null];
-        }
-        $raw = trim((string) $raw);
-        if ($raw === '') {
-            return [null, null];
-        }
-        if (preg_match('/^\d+$/', $raw) !== 1) {
-            return [null, 'harus berupa bilangan bulat 0 atau lebih.'];
+        if ($post !== null) {
+            foreach (['name', 'duration_hours', 'prints_included', 'description', 'price', 'sort_order'] as $field) {
+                if (isset($post[$field]) && is_string($post[$field])) {
+                    $values[$field] = $post[$field];
+                }
+            }
+            $values['is_active'] = isset($post['is_active']);
+            return $values;
         }
 
-        return [(int) $raw, null];
+        if ($template !== null) {
+            $values['name'] = (string) ($template['name'] ?? '');
+            if (($template['duration_hours'] ?? null) !== null) {
+                $duration = number_format((float) $template['duration_hours'], 1, ',', '.');
+                $values['duration_hours'] = rtrim(rtrim($duration, '0'), ',');
+            }
+            $values['prints_included'] = ($template['prints_included'] ?? null) !== null
+                ? (string) (int) $template['prints_included'] : '';
+            $values['description'] = (string) ($template['description'] ?? '');
+            $price = (string) ($template['price'] ?? '');
+            if ($price !== '' && str_contains($price, '.')) {
+                $price = rtrim(rtrim($price, '0'), '.');
+                if ($price === '') {
+                    $price = '0';
+                }
+            }
+            $values['price'] = $price;
+            $values['sort_order'] = (string) (int) ($template['sort_order'] ?? 0);
+            $values['is_active'] = (int) ($template['is_active'] ?? 0) === 1;
+        }
+
+        return $values;
     }
 
     /**
      * Uang dari isian formulir: terima "150000", "150.000",
      * "Rp 150.000" (titik = ribuan, koma = desimal).
+     * Dipakai juga oleh ClientBook.
      *
      * @return array{0: ?string, 1: ?string} [nilai DECIMAL, pesan error]
      */

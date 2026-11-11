@@ -10,6 +10,7 @@
  * @var array<string, mixed>  $values Nilai tampilan (ClientBook::formValues()).
  * @var array<string, string> $errors Peta error per kolom.
  * @var array<int, array<string, mixed>> $events Event milik tenant (tautan galeri).
+ * @var array<int, string> $packageNames Nama paket aktif dari Daftar Paket.
  */
 
 $title = $heading;
@@ -79,8 +80,16 @@ $err = static function (string $field) use ($errors): string {
             <div class="field">
                 <label for="package_name">Paket yang Diambil</label>
                 <input type="text" id="package_name" name="package_name" maxlength="120"
-                       placeholder="cth. Limited 400 Foto"
+                       placeholder="cth. Limited 400 Foto" list="package-name-options"
                        value="<?= e((string) ($values['package_name'] ?? '')) ?>">
+                <?php if (($packageNames ?? []) !== []): ?>
+                    <datalist id="package-name-options">
+                        <?php foreach ($packageNames as $packageName): ?>
+                            <option value="<?= e((string) $packageName) ?>"></option>
+                        <?php endforeach; ?>
+                    </datalist>
+                    <div class="hint">Pilih dari Daftar Paket atau ketik manual.</div>
+                <?php endif; ?>
                 <?= $err('package_name') ?>
             </div>
             <div class="field">

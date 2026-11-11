@@ -3338,8 +3338,9 @@ $router->post('/tenant/packages/{id}', static function (array $params): void {
 
 /* ---------------------------------------------------------------------
  * Fitur operasional tenant (v0.28.0, diminta pemilik):
- *   1. Daftar Paket  — katalog paket tingkat tenant yang dapat
- *      disalin ke event mana pun (package_templates).
+ *   1. Daftar Paket  — paket LAYANAN untuk klien event/wedding
+ *      (package_templates; v0.29.0). Bukan Paket Sesi: paket
+ *      sesi adalah paket booth self-photo untuk tamu.
  *   2. Manajemen Kru — anggota kru tenant + penugasan per event
  *      (crew_members + event_crew; penugasan diatur dari panel
  *      Kru Bertugas di Kelola Album).
@@ -3354,14 +3355,12 @@ $router->get('/tenant/package-catalog', static function (): void {
     $user = Auth::requireRole('tenant_admin', 'tenant_staff');
 
     $templates = [];
-    $tenantEvents = [];
     $tablesMissing = false;
     $pdo = Database::pdo();
     $tenantId = $user['tenant_id'];
     if ($pdo !== null && $tenantId !== null) {
         try {
             $templates = PackageTemplate::forTenant($pdo, (int) $tenantId);
-            $tenantEvents = Event::forTenant($pdo, (int) $tenantId);
         } catch (PDOException) {
             $tablesMissing = true;
         }
@@ -3372,7 +3371,6 @@ $router->get('/tenant/package-catalog', static function (): void {
         'user' => $user,
         'flashes' => Flash::pull(),
         'templates' => $templates,
-        'events' => $tenantEvents,
         'tablesMissing' => $tablesMissing,
     ]);
 });
@@ -3523,40 +3521,10 @@ $router->post('/tenant/package-catalog/{id}/delete', static function (array $par
 
     try {
         PackageTemplate::delete($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
-        Flash::success('Paket dihapus dari daftar. Paket pada event yang sudah terlanjur memakai salinannya tidak ikut terhapus.');
+        Flash::success('Paket dihapus dari daftar. Catatan booking klien yang sudah memakai nama paket ini tidak ikut berubah.');
     } catch (PDOException) {
         Flash::error('Paket gagal dihapus. Silakan coba lagi.');
     }
-    redirect('/tenant/package-catalog');
-});
-
-$router->post('/tenant/package-catalog/{id}/apply', static function (array $params): void {
-    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
-    Auth::requireCsrf();
-
-    $pdo = Database::pdo();
-    $tenantId = $user['tenant_id'];
-    if ($pdo === null || $tenantId === null) {
-        redirect('/tenant');
-    }
-    $tenantId = (int) $tenantId;
-
-    $template = PackageTemplate::findForTenant($pdo, $tenantId, (int) ($params['id'] ?? 0));
-    $eventId = isset($_POST['event_id']) && is_numeric($_POST['event_id']) ? (int) $_POST['event_id'] : 0;
-    $event = $eventId > 0 ? Event::findForTenant($pdo, $tenantId, $eventId) : null;
-    if ($template === null || $event === null) {
-        Flash::error('Pilih event tujuan yang valid untuk menyalin paket ini.');
-        redirect('/tenant/package-catalog');
-    }
-
-    try {
-        PackageTemplate::applyToEvent($pdo, $template, (int) $event['id']);
-    } catch (PDOException) {
-        Flash::error('Paket gagal disalin ke event. Silakan coba lagi.');
-        redirect('/tenant/package-catalog');
-    }
-
-    Flash::success('Paket "' . (string) $template['name'] . '" disalin ke event "' . (string) $event['name'] . '". Atur lebih lanjut di menu Paket Sesi.');
     redirect('/tenant/package-catalog');
 });
 
@@ -3778,11 +3746,14 @@ $router->get('/tenant/clients/create', static function (): void {
     $pdo = Database::pdo();
     $tenantId = $user['tenant_id'];
     $tenantEvents = [];
+    $packageNames = [];
     if ($pdo !== null && $tenantId !== null) {
         try {
             $tenantEvents = Event::forTenant($pdo, (int) $tenantId);
+            $packageNames = PackageTemplate::names($pdo, (int) $tenantId);
         } catch (PDOException) {
             $tenantEvents = [];
+            $packageNames = [];
         }
     }
 
@@ -3795,6 +3766,7 @@ $router->get('/tenant/clients/create', static function (): void {
         'values' => ClientBook::formValues(),
         'errors' => [],
         'events' => $tenantEvents,
+        'packageNames' => $packageNames,
     ]);
 });
 
@@ -3813,10 +3785,13 @@ $router->post('/tenant/clients', static function (): void {
     [$data, $errors] = ClientBook::validate($pdo, $tenantId, $_POST);
     if ($errors !== []) {
         $tenantEvents = [];
+        $packageNames = [];
         try {
             $tenantEvents = Event::forTenant($pdo, $tenantId);
+            $packageNames = PackageTemplate::names($pdo, $tenantId);
         } catch (PDOException) {
             $tenantEvents = [];
+            $packageNames = [];
         }
         $flashes = Flash::pull();
         $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
@@ -3829,6 +3804,7 @@ $router->post('/tenant/clients', static function (): void {
             'values' => ClientBook::formValues(null, $_POST),
             'errors' => $errors,
             'events' => $tenantEvents,
+            'packageNames' => $packageNames,
         ], 422);
         return;
     }
@@ -3851,10 +3827,12 @@ $router->get('/tenant/clients/{id}/edit', static function (array $params): void 
     $tenantId = $user['tenant_id'];
     $booking = null;
     $tenantEvents = [];
+    $packageNames = [];
     if ($pdo !== null && $tenantId !== null) {
         try {
             $booking = ClientBook::findForTenant($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
             $tenantEvents = Event::forTenant($pdo, (int) $tenantId);
+            $packageNames = PackageTemplate::names($pdo, (int) $tenantId);
         } catch (PDOException) {
             $booking = null;
         }
@@ -3876,6 +3854,7 @@ $router->get('/tenant/clients/{id}/edit', static function (array $params): void 
         'values' => ClientBook::formValues($booking),
         'errors' => [],
         'events' => $tenantEvents,
+        'packageNames' => $packageNames,
     ]);
 });
 
@@ -3904,10 +3883,13 @@ $router->post('/tenant/clients/{id}', static function (array $params): void {
     [$data, $errors] = ClientBook::validate($pdo, $tenantId, $_POST);
     if ($errors !== []) {
         $tenantEvents = [];
+        $packageNames = [];
         try {
             $tenantEvents = Event::forTenant($pdo, $tenantId);
+            $packageNames = PackageTemplate::names($pdo, $tenantId);
         } catch (PDOException) {
             $tenantEvents = [];
+            $packageNames = [];
         }
         $flashes = Flash::pull();
         $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
@@ -3920,6 +3902,7 @@ $router->post('/tenant/clients/{id}', static function (array $params): void {
             'values' => ClientBook::formValues($booking, $_POST),
             'errors' => $errors,
             'events' => $tenantEvents,
+            'packageNames' => $packageNames,
         ], 422);
         return;
     }
