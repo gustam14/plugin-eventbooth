@@ -141,6 +141,13 @@ $renderEventAlbum = static function (?array $event, string $albumBase): void {
         $retentionEmptiedAt = Retention::emptiedAt($pdo, (int) $event['id']);
     }
 
+    // Branding tenant (v0.24.0): logo/warna/tagline/kontak
+    // tenant untuk kepala galeri. Toleran pramigrasi.
+    $brand = Branding::defaults();
+    if ($pdo !== null) {
+        $brand = Branding::forTenantId($pdo, (int) ($event['tenant_id'] ?? 0));
+    }
+
     View::render('album/event', [
         'appName' => Config::appName(),
         'appUrl' => Config::appUrl(),
@@ -152,6 +159,7 @@ $renderEventAlbum = static function (?array $event, string $albumBase): void {
         'totalSessions' => $totalSessions,
         'albumBase' => $albumBase,
         'retentionEmptiedAt' => $retentionEmptiedAt,
+        'brand' => $brand,
     ]);
 };
 
@@ -222,7 +230,37 @@ $router->get('/s/{code}', static function (array $params): void {
         'version' => Config::appVersion(),
         'session' => $session,
         'media' => $media,
+        'brand' => $pdo !== null
+            ? Branding::forEventId($pdo, (int) ($session['event_id'] ?? 0))
+            : Branding::defaults(),
     ]);
+});
+
+// Logo branding tenant — berkas tersimpan di storage/branding
+// (di luar docroot) dan hanya disajikan lewat rute ini dengan
+// nama berkas berpola ketat {tenant}-{acak}.{ext}.
+$router->get('/brand-logo/{file}', static function (array $params): void {
+    $file = basename((string) ($params['file'] ?? ''));
+    $path = null;
+    $mime = null;
+    if (preg_match('/^\d+-[a-f0-9]{12}\.(png|jpg|webp)$/', $file, $m) === 1) {
+        $candidate = Branding::storageDir() . '/' . $file;
+        if (is_file($candidate)) {
+            $path = $candidate;
+            $mime = ['png' => 'image/png', 'jpg' => 'image/jpeg', 'webp' => 'image/webp'][$m[1]];
+        }
+    }
+    if ($path === null || $mime === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . (string) filesize($path));
+    header('Cache-Control: public, max-age=31536000, immutable');
+    readfile($path);
 });
 
 /* ---------------------------------------------------------------------
@@ -2223,6 +2261,110 @@ $router->post('/tenant/midtrans', static function (): void {
     }
 
     redirect('/tenant/midtrans');
+});
+
+// Branding galeri publik (v0.24.0): logo, warna aksen,
+// tagline, dan Instagram tenant. Hanya admin tenant.
+$router->get('/tenant/branding', static function (): void {
+    $user = Auth::requireRole('tenant_admin');
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    $tenant = null;
+    $brand = Branding::defaults();
+    $sampleUrl = null;
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $tenant = Tenant::find($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $tenant = null;
+        }
+        $brand = Branding::forTenantId($pdo, (int) $tenantId);
+        if ($tenant !== null) {
+            $brand['raw_color'] = (string) ($tenant['brand_color'] ?? '');
+            $brand['raw_tagline'] = (string) ($tenant['brand_tagline'] ?? '');
+            $brand['raw_instagram'] = (string) ($tenant['brand_instagram'] ?? '');
+            try {
+                $stmt = $pdo->prepare(
+                    'SELECT slug FROM events WHERE tenant_id = :tenant ORDER BY id DESC LIMIT 1'
+                );
+                $stmt->execute(['tenant' => (int) $tenantId]);
+                $eventSlug = $stmt->fetchColumn();
+                if ($eventSlug !== false && (string) $eventSlug !== '') {
+                    $sampleUrl = Album::galleryUrl('', (string) ($tenant['slug'] ?? ''), (string) $eventSlug);
+                }
+            } catch (PDOException) {
+                $sampleUrl = null;
+            }
+        }
+    }
+    if ($tenant === null) {
+        Flash::error('Data tenant belum dapat dibaca. Silakan coba lagi.');
+        redirect('/tenant');
+    }
+
+    View::render('tenant/branding', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'tenant' => $tenant,
+        'brand' => $brand,
+        'presets' => Branding::PRESETS,
+        'sampleUrl' => $sampleUrl,
+    ]);
+});
+
+$router->post('/tenant/branding', static function (): void {
+    $user = Auth::requireRole('tenant_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Layanan belum siap. Silakan coba lagi.');
+        redirect('/tenant/branding');
+    }
+
+    try {
+        Branding::saveSettings(
+            $pdo,
+            (int) $tenantId,
+            isset($_POST['brand_color']) ? (string) $_POST['brand_color'] : null,
+            (string) ($_POST['brand_tagline'] ?? ''),
+            (string) ($_POST['brand_instagram'] ?? '')
+        );
+        if (isset($_FILES['logo']) && (int) ($_FILES['logo']['size'] ?? 0) > 0) {
+            Branding::storeLogo($pdo, (int) $tenantId, $_FILES['logo']);
+        }
+        Flash::success('Branding galeri tersimpan — galeri publikmu sekarang memakai merekmu sendiri.');
+    } catch (BrandingException $e) {
+        Flash::error($e->getMessage());
+    } catch (PDOException) {
+        Flash::error('Pengaturan branding belum bisa disimpan — jalankan migrasi database/migrations/2026-11-11-tenant-branding.sql di phpMyAdmin dulu.');
+    }
+
+    redirect('/tenant/branding');
+});
+
+$router->post('/tenant/branding/logo-remove', static function (): void {
+    $user = Auth::requireRole('tenant_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Layanan belum siap. Silakan coba lagi.');
+        redirect('/tenant/branding');
+    }
+
+    try {
+        Branding::removeLogo($pdo, (int) $tenantId);
+        Flash::success('Logo dihapus — kepala galeri kembali memakai merek platform.');
+    } catch (PDOException) {
+        Flash::error('Logo belum bisa dihapus — jalankan migrasi database/migrations/2026-11-11-tenant-branding.sql di phpMyAdmin dulu.');
+    }
+
+    redirect('/tenant/branding');
 });
 
 $router->get('/tenant/licenses', static function (): void {

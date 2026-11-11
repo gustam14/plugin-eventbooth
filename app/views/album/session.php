@@ -12,6 +12,13 @@
  */
 
 $eventName = (string) ($session['event_name'] ?? '');
+$brand = is_array($brand ?? null) ? $brand : Branding::defaults();
+$brandCss = Branding::cssVars($brand);
+$brandCustom = !empty($brand['has_custom']);
+$brandLogo = (string) ($brand['logo_url'] ?? '');
+$brandTagline = (string) ($brand['tagline'] ?? '');
+$brandInk = (string) ($brand['ink'] ?? '#1A1405');
+$vendorName = (string) ($brand['vendor_name'] ?? '');
 $eventSlug = (string) ($session['event_slug'] ?? '');
 $albumHref = Album::galleryUrl('', isset($session['tenant_slug']) ? (string) $session['tenant_slug'] : null, $eventSlug);
 $code = (string) ($session['code'] ?? '');
@@ -46,7 +53,7 @@ foreach (($media ?? []) as $item) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0A0C0F">
-<title><?= e($eventName) ?> — Sesi <?= e($code) ?> · <?= e($appName) ?></title>
+<title><?= e($eventName) ?> — Sesi <?= e($code) ?> · <?= e($vendorName !== '' ? $vendorName : $appName) ?></title>
 <meta name="description" content="Hasil foto sesi <?= e($code) ?> pada event <?= e($eventName) ?> — lihat dan unduh fotomu.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230A0C0F'/%3E%3Cg fill='none' stroke='%23C9A24B' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 26h6l4-5h16l4 5h6a4 4 0 0 1 4 4v16a4 4 0 0 1-4 4H14a4 4 0 0 1-4-4V30a4 4 0 0 1 4-4z'/%3E%3Ccircle cx='32' cy='37' r='7'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -66,6 +73,7 @@ foreach (($media ?? []) as $item) {
         --gold-2: #E7C878;
         --gold-grad: linear-gradient(135deg, #C9A24B 0%, #E7C878 100%);
         --gold-ink: #1A1405;
+        --gold-rgb: 201, 162, 75;
         --font: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -73,8 +81,8 @@ foreach (($media ?? []) as $item) {
         font-family: var(--font);
         /* Latar ambien (v0.15.0), selaras dashboard & album. */
         background:
-            radial-gradient(880px 480px at 88% -10%, rgba(201, 162, 75, .07), transparent 62%),
-            radial-gradient(720px 460px at -12% 108%, rgba(201, 162, 75, .045), transparent 60%),
+            radial-gradient(880px 480px at 88% -10%, rgba(var(--gold-rgb), .07), transparent 62%),
+            radial-gradient(720px 460px at -12% 108%, rgba(var(--gold-rgb), .045), transparent 60%),
             var(--bg);
         background-attachment: fixed;
         color: var(--text);
@@ -84,7 +92,7 @@ foreach (($media ?? []) as $item) {
         overflow-x: clip;
     }
     img, svg { max-width: 100%; }
-    ::selection { background: rgba(201, 162, 75, .35); color: #fff; }
+    ::selection { background: rgba(var(--gold-rgb), .35); color: #fff; }
     :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 4px; }
     a { color: var(--gold-2); text-decoration: none; }
     .wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
@@ -103,18 +111,20 @@ foreach (($media ?? []) as $item) {
     .logo-mark {
         flex: none; display: inline-flex; align-items: center; justify-content: center;
         width: 38px; height: 38px; border-radius: 10px;
-        background: var(--gold-grad); box-shadow: 0 8px 20px rgba(201, 162, 75, .30);
+        background: var(--gold-grad); box-shadow: 0 8px 20px rgba(var(--gold-rgb), .30);
     }
     .brandmark-text { font-size: 16.5px; font-weight: 800; letter-spacing: -.01em; color: var(--text); line-height: 1.15; }
     .brandmark-text .accent { background: var(--gold-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
     .brandmark-sub { display: block; font-size: 10.5px; font-weight: 600; color: var(--muted-2); letter-spacing: .06em; text-transform: uppercase; }
+    .brand-logo-img { height: 40px; width: auto; max-width: 190px; object-fit: contain; display: block; }
+    .brand-logo-img.small { height: 30px; max-width: 150px; }
     .back-link { color: var(--muted); font-size: 14.5px; font-weight: 600; transition: color 150ms ease; white-space: nowrap; }
     .back-link:hover { color: var(--text); text-decoration: none; }
 
     /* ---------- Kepala sesi ---------- */
     .album-head {
         padding: 48px 0 6px;
-        background: radial-gradient(720px 380px at 85% -20%, rgba(201, 162, 75, .17), transparent 62%);
+        background: radial-gradient(720px 380px at 85% -20%, rgba(var(--gold-rgb), .17), transparent 62%);
     }
     .album-head .kicker {
         font-size: 12.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--gold-2);
@@ -134,7 +144,7 @@ foreach (($media ?? []) as $item) {
         box-shadow: 0 10px 26px rgba(0, 0, 0, .30);
         transition: border-color 200ms ease, box-shadow 200ms ease;
     }
-    .media-card:hover { border-color: rgba(201, 162, 75, .35); box-shadow: 0 18px 38px rgba(0, 0, 0, .42); }
+    .media-card:hover { border-color: rgba(var(--gold-rgb), .35); box-shadow: 0 18px 38px rgba(0, 0, 0, .42); }
     .media-card .cover { aspect-ratio: 4 / 3; background: #0D1015; display: flex; align-items: center; justify-content: center; overflow: hidden; }
     .media-card .cover img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 400ms ease; }
     .media-card:hover .cover img { transform: scale(1.035); }
@@ -151,8 +161,8 @@ foreach (($media ?? []) as $item) {
         padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line-strong); color: var(--text);
         transition: border-color 150ms ease, background 150ms ease;
     }
-    .media-card .actions a:hover { border-color: rgba(201, 162, 75, .55); text-decoration: none; }
-    .media-card .actions a.download { background: var(--gold-grad); color: var(--gold-ink); border-color: transparent; box-shadow: 0 6px 16px rgba(201, 162, 75, .22); }
+    .media-card .actions a:hover { border-color: rgba(var(--gold-rgb), .55); text-decoration: none; }
+    .media-card .actions a.download { background: var(--gold-grad); color: var(--gold-ink); border-color: transparent; box-shadow: 0 6px 16px rgba(var(--gold-rgb), .22); }
     .media-card .actions a.download:hover { filter: brightness(1.06); }
 
     .empty {
@@ -176,7 +186,7 @@ foreach (($media ?? []) as $item) {
         transition: background 200ms ease, color 200ms ease, border-color 200ms ease, transform 200ms ease;
     }
     .media-card:hover .play-badge span {
-        background: rgba(201, 162, 75, .92); color: var(--gold-ink);
+        background: rgba(var(--gold-rgb), .92); color: var(--gold-ink);
         border-color: transparent; transform: scale(1.06);
     }
     .media-card .actions button {
@@ -185,7 +195,7 @@ foreach (($media ?? []) as $item) {
         color: var(--text); background: transparent; cursor: pointer;
         transition: border-color 150ms ease;
     }
-    .media-card .actions button:hover { border-color: rgba(201, 162, 75, .55); }
+    .media-card .actions button:hover { border-color: rgba(var(--gold-rgb), .55); }
     .lightbox {
         position: fixed; inset: 0; z-index: 200; display: none;
         background: rgba(4, 5, 7, .92); flex-direction: column;
@@ -203,7 +213,7 @@ foreach (($media ?? []) as $item) {
         width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--line-strong);
         background: rgba(255, 255, 255, .04); color: #fff; cursor: pointer; font-family: inherit;
     }
-    .lb-actions a:hover, .lb-actions button:hover { border-color: rgba(201, 162, 75, .6); text-decoration: none; }
+    .lb-actions a:hover, .lb-actions button:hover { border-color: rgba(var(--gold-rgb), .6); text-decoration: none; }
     .lb-stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 4px 12px; }
     .lb-stage img, .lb-stage video { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 12px; box-shadow: 0 30px 80px rgba(0, 0, 0, .6); }
     .lb-stage iframe.lb-frame { width: 100%; height: 100%; max-height: 100%; border: 0; border-radius: 12px; background: #000; }
@@ -215,7 +225,7 @@ foreach (($media ?? []) as $item) {
         display: flex; align-items: center; justify-content: center;
         transition: border-color 180ms ease, background 180ms ease;
     }
-    .lb-nav:hover { border-color: rgba(201, 162, 75, .65); background: rgba(201, 162, 75, .16); }
+    .lb-nav:hover { border-color: rgba(var(--gold-rgb), .65); background: rgba(var(--gold-rgb), .16); }
     .lb-nav.prev { left: 12px; }
     .lb-nav.next { right: 12px; }
     .lb-caption { text-align: center; color: var(--muted); font-size: 13.5px; padding: 8px 16px 4px; word-break: break-all; }
@@ -259,19 +269,35 @@ foreach (($media ?? []) as $item) {
         .lb-strip button.active { transform: none; }
     }
 </style>
+<?php if ($brandCss !== ''): ?><style><?= $brandCss ?></style><?php endif; ?>
 </head>
 <body>
 
 <header class="site-head">
     <div class="wrap">
-        <div class="brandmark">
-            <a href="/" aria-label="Plugin Eventbooth — ke halaman utama">
-                <span class="logo-mark" aria-hidden="true">
-                    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#1A1405" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.6L8.5 5.5h7L17.4 8H20a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="13.2" r="3.4"/></svg>
-                </span>
-                <span class="brandmark-text">Plugin <span class="accent">Eventbooth</span><span class="brandmark-sub">by EventBooth</span></span>
-            </a>
-        </div>
+        <?php if ($brandCustom): ?>
+            <div class="brandmark">
+                <a href="<?= e($albumHref) ?>" aria-label="<?= e($vendorName) ?> — album event">
+                    <?php if ($brandLogo !== ''): ?>
+                        <img class="brand-logo-img" src="<?= e($brandLogo) ?>" alt="<?= e($vendorName) ?>">
+                    <?php else: ?>
+                        <span class="logo-mark" aria-hidden="true">
+                            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="<?= e($brandInk) ?>" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.6L8.5 5.5h7L17.4 8H20a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="13.2" r="3.4"/></svg>
+                        </span>
+                    <?php endif; ?>
+                    <span class="brandmark-text"><?= e($vendorName) ?><?php if ($brandTagline !== ''): ?><span class="brandmark-sub"><?= e($brandTagline) ?></span><?php endif; ?></span>
+                </a>
+            </div>
+        <?php else: ?>
+            <div class="brandmark">
+                <a href="/" aria-label="Plugin Eventbooth — ke halaman utama">
+                    <span class="logo-mark" aria-hidden="true">
+                        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#1A1405" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.6L8.5 5.5h7L17.4 8H20a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="13.2" r="3.4"/></svg>
+                    </span>
+                    <span class="brandmark-text">Plugin <span class="accent">Eventbooth</span><span class="brandmark-sub">by EventBooth</span></span>
+                </a>
+            </div>
+        <?php endif; ?>
         <a class="back-link" href="<?= e($albumHref) ?>">&larr; Album Event</a>
     </div>
 </header>
@@ -339,13 +365,27 @@ foreach (($media ?? []) as $item) {
 
 <footer class="site-foot">
     <div class="wrap">
-        <div class="brandmark">
-            <span class="logo-mark" aria-hidden="true">
-                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#1A1405" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.6L8.5 5.5h7L17.4 8H20a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="13.2" r="3.4"/></svg>
-            </span>
-            <span class="brandmark-text">Plugin <span class="accent">Eventbooth</span></span>
-        </div>
-        <p>&copy; <?= date('Y') ?> <?= e($appName) ?> · Bagian dari EventBooth · <a href="/privacy">Kebijakan Privasi</a> · <a href="/terms">Syarat Layanan</a> · <span title="Versi aplikasi">v<?= e($version) ?></span></p>
+        <?php if ($brandCustom): ?>
+            <div class="brandmark">
+                <?php if ($brandLogo !== ''): ?>
+                    <img class="brand-logo-img small" src="<?= e($brandLogo) ?>" alt="<?= e($vendorName) ?>">
+                <?php else: ?>
+                    <span class="logo-mark" aria-hidden="true">
+                        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="<?= e($brandInk) ?>" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.6L8.5 5.5h7L17.4 8H20a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="13.2" r="3.4"/></svg>
+                    </span>
+                    <span class="brandmark-text"><?= e($vendorName) ?></span>
+                <?php endif; ?>
+            </div>
+            <p>&copy; <?= date('Y') ?> <?= e($vendorName) ?> · Didukung oleh <a href="/">Plugin Eventbooth</a> · <a href="/privacy">Kebijakan Privasi</a> · <a href="/terms">Syarat Layanan</a> · <span title="Versi aplikasi">v<?= e($version) ?></span></p>
+        <?php else: ?>
+            <div class="brandmark">
+                <span class="logo-mark" aria-hidden="true">
+                    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#1A1405" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.6L8.5 5.5h7L17.4 8H20a1.5 1.5 0 0 1 1.5 1.5V18A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="13.2" r="3.4"/></svg>
+                </span>
+                <span class="brandmark-text">Plugin <span class="accent">Eventbooth</span></span>
+            </div>
+            <p>&copy; <?= date('Y') ?> <?= e($appName) ?> · Bagian dari EventBooth · <a href="/privacy">Kebijakan Privasi</a> · <a href="/terms">Syarat Layanan</a> · <span title="Versi aplikasi">v<?= e($version) ?></span></p>
+        <?php endif; ?>
     </div>
 </footer>
 
