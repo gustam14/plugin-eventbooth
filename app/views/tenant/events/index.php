@@ -110,6 +110,11 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
                             <a class="btn btn-small" href="/tenant/events/<?= (int) $event['id'] ?>/album/download">Unduh ZIP</a>
                         <?php endif; ?>
                         <a class="btn btn-small" href="/tenant/events/<?= (int) $event['id'] ?>/edit">Ubah</a>
+                        <form method="post" action="/tenant/events/<?= (int) $event['id'] ?>/album/delete-event"
+                              onsubmit="return confirm('Hapus EVENT <?= e((string) $event['name']) ?> secara permanen beserta semua sesi, berkas, dan paketnya?');">
+                            <?= Auth::csrfField() ?>
+                            <button class="btn btn-danger btn-small" type="submit">Hapus</button>
+                        </form>
                     </div>
                 </td>
             </tr>

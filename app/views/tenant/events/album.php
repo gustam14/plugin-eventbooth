@@ -350,9 +350,9 @@ foreach (($sessionsData ?? []) as $rowData) {
     </div>
 <?php endforeach; ?>
 
-<?php if ($sessionsData !== []): ?>
     <div class="panel-box" style="border-color: var(--err-line, #5A2B2B);">
         <h3 style="margin-top: 0;">Zona Berbahaya</h3>
+        <?php if ($sessionsData !== []): ?>
         <p class="hint" style="margin-bottom: 12px;">
             <strong>Kosongkan album:</strong> semua sesi dan berkas event ini dihapus permanen
             dari galeri dan penyimpanan. Event-nya sendiri tetap ada.
@@ -362,6 +362,7 @@ foreach (($sessionsData ?? []) as $rowData) {
             <?= Auth::csrfField() ?>
             <button class="btn btn-danger" type="submit">Hapus Seluruh Isi Album</button>
         </form>
+        <?php endif; ?>
         <p class="hint" style="margin-bottom: 12px;">
             <strong>Hapus event:</strong> event ini dihapus permanen beserta seluruh sesi,
             berkas di penyimpanan, paket sesi, dan pengaturannya. Riwayat pembayaran tamu
@@ -373,7 +374,6 @@ foreach (($sessionsData ?? []) as $rowData) {
             <button class="btn btn-danger" type="submit">Hapus Event Ini</button>
         </form>
     </div>
-<?php endif; ?>
 
 <script>
 function ebSelectedCount() {
