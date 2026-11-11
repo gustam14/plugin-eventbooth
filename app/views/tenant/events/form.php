@@ -10,6 +10,8 @@
  * @var array<string, mixed>  $values Nilai tampilan (Event::formValues()).
  * @var array<string, string> $errors Peta error per kolom.
  * @var array<int, array<string, mixed>> $driveAccounts Akun Drive platform berstatus connected.
+ * @var array<int, array<string, mixed>> $clients Klien tenant dari Buku Klien (v0.31.0).
+ * @var array<int, string> $packageNames Nama paket aktif dari Daftar Paket (v0.31.0).
  */
 
 $title = $heading;
@@ -105,6 +107,56 @@ $selectedDrive = (string) ($values['drive_account_id'] ?? 'auto');
                 <?php endif; ?>
             </div>
         </div>
+
+        <fieldset>
+            <legend>Klien &amp; Paket yang Diambil</legend>
+            <div class="form-grid">
+                <div class="field">
+                    <label for="client_id">Klien (dari Buku Klien)</label>
+                    <select id="client_id" name="client_id">
+                        <option value="">— Tanpa klien —</option>
+                        <?php foreach (($clients ?? []) as $clientOption): ?>
+                            <option value="<?= (int) $clientOption['id'] ?>"<?= (string) ($values['client_id'] ?? '') === (string) (int) $clientOption['id'] ? ' selected' : '' ?>>
+                                <?= e((string) $clientOption['client_name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <div class="hint">Klien baru dicatat dulu di menu Buku Klien, lalu dipilih di sini.</div>
+                    <?= $err('client_id') ?>
+                </div>
+                <div class="field">
+                    <label for="client_package_name">Paket yang Diambil</label>
+                    <input type="text" id="client_package_name" name="client_package_name" maxlength="120"
+                           placeholder="cth. Limited 400 Foto" list="client-package-options"
+                           value="<?= e((string) ($values['client_package_name'] ?? '')) ?>">
+                    <?php if (($packageNames ?? []) !== []): ?>
+                        <datalist id="client-package-options">
+                            <?php foreach ($packageNames as $packageName): ?>
+                                <option value="<?= e((string) $packageName) ?>"></option>
+                            <?php endforeach; ?>
+                        </datalist>
+                        <div class="hint">Pilih dari Daftar Paket atau ketik manual.</div>
+                    <?php endif; ?>
+                    <?= $err('client_package_name') ?>
+                </div>
+            </div>
+            <div class="form-grid">
+                <div class="field">
+                    <label for="client_total_price">Nilai Paket (Rp)</label>
+                    <input type="text" id="client_total_price" name="client_total_price" inputmode="numeric"
+                           value="<?= e((string) ($values['client_total_price'] ?? '')) ?>">
+                    <div class="hint">Harga kesepakatan dengan klien. Contoh: 3000000 atau 3.000.000.</div>
+                    <?= $err('client_total_price') ?>
+                </div>
+                <div class="field">
+                    <label for="client_dp_paid">DP Sudah Dibayar (Rp)</label>
+                    <input type="text" id="client_dp_paid" name="client_dp_paid" inputmode="numeric"
+                           value="<?= e((string) ($values['client_dp_paid'] ?? '')) ?>">
+                    <div class="hint">Sisa pembayaran tampil otomatis di daftar Event.</div>
+                    <?= $err('client_dp_paid') ?>
+                </div>
+            </div>
+        </fieldset>
 
         <fieldset>
             <legend>Pembayaran Tamu</legend>

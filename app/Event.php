@@ -48,6 +48,7 @@ final class Event
     {
         $stmt = $pdo->prepare(
             'SELECT e.*,
+                    cb.client_name AS client_name,
                     (SELECT COUNT(*) FROM sessions s
                       WHERE s.event_id = e.id) AS session_count,
                     (SELECT MIN(s.created_at) FROM sessions s
@@ -55,6 +56,7 @@ final class Event
                     (SELECT COUNT(*) FROM media_files m
                       WHERE m.event_id = e.id) AS media_count
                FROM events e
+               LEFT JOIN client_bookings cb ON cb.id = e.client_id
               WHERE e.tenant_id = :tenant_id
               ORDER BY e.id DESC'
         );
@@ -214,9 +216,10 @@ final class Event
      *
      * @param array<string, mixed>      $input    Isi $_POST.
      * @param array<string, mixed>|null $existing Baris event (mode ubah) atau null (mode buat).
+     * @param int $tenantId Tenant pemilik (untuk memvalidasi klien dari Buku Klien, v0.31.0); 0 = lewati.
      * @return array{0: array<string, mixed>, 1: array<string, string>}
      */
-    public static function validate(PDO $pdo, array $input, ?array $existing = null): array
+    public static function validate(PDO $pdo, array $input, ?array $existing = null, int $tenantId = 0): array
     {
         $errors = [];
         $data = [];
@@ -317,6 +320,59 @@ final class Event
             $data['session_quota_limit'] = null;
         }
 
+        // --- Klien & paket klien (v0.31.0) --------------------------------
+        // Alur pemilik: klien dicatat dulu di Buku Klien, lalu
+        // event dibuat dari klien itu. Paket/nilai/DP booking
+        // tinggal di event (bukan lagi di buku klien).
+        $clientId = isset($input['client_id']) && is_numeric($input['client_id'])
+            ? (int) $input['client_id'] : 0;
+        if ($clientId > 0 && $tenantId > 0) {
+            try {
+                if (ClientBook::findForTenant($pdo, $tenantId, $clientId) === null) {
+                    $errors['client_id'] = 'Klien tidak ditemukan pada buku klienmu.';
+                    $clientId = 0;
+                }
+            } catch (PDOException) {
+                // Tabel klien belum dimigrasi — jangan blokir
+                // penyimpanan event; klien dilewati.
+                $clientId = 0;
+            }
+        }
+        $data['client_id'] = $clientId > 0 ? $clientId : null;
+
+        $packageName = trim((string) ($input['client_package_name'] ?? ''));
+        if (self::length($packageName) > 120) {
+            $errors['client_package_name'] = 'Nama paket klien maksimal 120 karakter.';
+        }
+        $data['client_package_name'] = $packageName !== '' ? $packageName : null;
+
+        $totalRaw = trim((string) ($input['client_total_price'] ?? ''));
+        if ($totalRaw === '') {
+            $data['client_total_price'] = null;
+        } else {
+            [$total, $totalError] = PackageTemplate::parseMoney($totalRaw);
+            if ($totalError !== null) {
+                $errors['client_total_price'] = 'Nilai paket: ' . $totalError;
+            }
+            $data['client_total_price'] = $total;
+        }
+
+        $dpRaw = trim((string) ($input['client_dp_paid'] ?? ''));
+        if ($dpRaw === '') {
+            $data['client_dp_paid'] = null;
+        } else {
+            [$dp, $dpError] = PackageTemplate::parseMoney($dpRaw);
+            if ($dpError !== null) {
+                $errors['client_dp_paid'] = 'DP: ' . $dpError;
+            }
+            $data['client_dp_paid'] = $dp;
+        }
+        if (!isset($errors['client_total_price']) && !isset($errors['client_dp_paid'])
+            && $data['client_total_price'] !== null && $data['client_dp_paid'] !== null
+            && (float) $data['client_dp_paid'] > (float) $data['client_total_price']) {
+            $errors['client_dp_paid'] = 'DP tidak boleh melebihi nilai paket.';
+        }
+
         return [$data, $errors];
     }
 
@@ -330,11 +386,15 @@ final class Event
             'INSERT INTO events
                 (tenant_id, drive_account_id, name, slug, venue,
                  starts_at, ends_at, payment_lock_enabled,
-                 limit_mode, session_quota_limit, status)
+                 limit_mode, session_quota_limit, status,
+                 client_id, client_package_name,
+                 client_total_price, client_dp_paid)
              VALUES
                 (:tenant_id, :drive_account_id, :name, :slug, :venue,
                  :starts_at, :ends_at, :payment_lock_enabled,
-                 :limit_mode, :session_quota_limit, :status)'
+                 :limit_mode, :session_quota_limit, :status,
+                 :client_id, :client_package_name,
+                 :client_total_price, :client_dp_paid)'
         );
         $stmt->execute([
             'tenant_id' => $tenantId,
@@ -348,6 +408,10 @@ final class Event
             'limit_mode' => $data['limit_mode'],
             'session_quota_limit' => $data['session_quota_limit'],
             'status' => $data['status'],
+            'client_id' => $data['client_id'] ?? null,
+            'client_package_name' => $data['client_package_name'] ?? null,
+            'client_total_price' => $data['client_total_price'] ?? null,
+            'client_dp_paid' => $data['client_dp_paid'] ?? null,
         ]);
 
         return (int) $pdo->lastInsertId();
@@ -367,7 +431,11 @@ final class Event
                     payment_lock_enabled = :payment_lock_enabled,
                     limit_mode = :limit_mode,
                     session_quota_limit = :session_quota_limit,
-                    status = :status
+                    status = :status,
+                    client_id = :client_id,
+                    client_package_name = :client_package_name,
+                    client_total_price = :client_total_price,
+                    client_dp_paid = :client_dp_paid
               WHERE id = :id'
         );
         $stmt->execute([
@@ -381,8 +449,22 @@ final class Event
             'limit_mode' => $data['limit_mode'],
             'session_quota_limit' => $data['session_quota_limit'],
             'status' => $data['status'],
+            'client_id' => $data['client_id'] ?? null,
+            'client_package_name' => $data['client_package_name'] ?? null,
+            'client_total_price' => $data['client_total_price'] ?? null,
+            'client_dp_paid' => $data['client_dp_paid'] ?? null,
             'id' => $id,
         ]);
+    }
+
+    /** Sisa pembayaran klien pada event (null bila nilai paket tidak diisi). */
+    public static function clientRemaining(array $event): ?float
+    {
+        if (($event['client_total_price'] ?? null) === null) {
+            return null;
+        }
+
+        return max(0.0, (float) $event['client_total_price'] - (float) ($event['client_dp_paid'] ?? 0));
     }
 
     /* -----------------------------------------------------------------
@@ -462,13 +544,20 @@ final class Event
             'payment_lock_enabled' => true,
             'limit_mode' => 'none',
             'session_quota_limit' => '',
+            'client_id' => '',
+            'client_package_name' => '',
+            'client_total_price' => '',
+            'client_dp_paid' => '',
         ];
 
         if ($post !== null) {
-            foreach (['name', 'slug', 'venue', 'status', 'limit_mode'] as $field) {
+            foreach (['name', 'slug', 'venue', 'status', 'limit_mode', 'client_package_name', 'client_total_price', 'client_dp_paid'] as $field) {
                 if (isset($post[$field]) && is_string($post[$field])) {
                     $values[$field] = $post[$field];
                 }
+            }
+            if (isset($post['client_id']) && is_string($post['client_id'])) {
+                $values['client_id'] = $post['client_id'];
             }
             foreach (['starts_at', 'ends_at'] as $field) {
                 if (isset($post[$field]) && is_string($post[$field])) {
@@ -501,6 +590,17 @@ final class Event
             $values['session_quota_limit'] = ($event['session_quota_limit'] ?? null) !== null
                 ? (string) (int) $event['session_quota_limit']
                 : '';
+            $values['client_id'] = ($event['client_id'] ?? null) !== null
+                ? (string) (int) $event['client_id']
+                : '';
+            $values['client_package_name'] = (string) ($event['client_package_name'] ?? '');
+            foreach (['client_total_price', 'client_dp_paid'] as $moneyField) {
+                $money = (string) ($event[$moneyField] ?? '');
+                if ($money !== '' && str_contains($money, '.')) {
+                    $money = rtrim(rtrim($money, '0'), '.');
+                }
+                $values[$moneyField] = $money === '' ? '' : $money;
+            }
         }
 
         return $values;

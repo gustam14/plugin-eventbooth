@@ -2349,34 +2349,43 @@ $router->get('/tenant', static function (): void {
         }
     }
 
-    // Data operasional Beranda (v0.30.0): booking terdekat
-    // dari Buku Klien + ringkasan kru/paket/sisa pembayaran.
-    // Query terpisah dan toleran tabel yang belum dimigrasi.
-    $upcomingBookings = [];
-    $opsStats = ['crew' => 0, 'packages' => 0, 'bookings_active' => 0, 'outstanding' => 0.0];
+    // Data operasional Beranda (v0.31.0): event terdekat +
+    // ringkasan kru/paket/klien. Query terpisah dan toleran
+    // tabel/kolom yang belum dimigrasi.
+    $upcomingEvents = [];
+    $opsStats = ['crew' => 0, 'packages' => 0, 'clients' => 0, 'upcoming_events' => 0];
     if ($pdo !== null && $tenantId !== null) {
         try {
-            $clientStats = ClientBook::stats($pdo, (int) $tenantId);
-            $opsStats['bookings_active'] = $clientStats['active_count'];
-            $opsStats['outstanding'] = $clientStats['outstanding'];
             $opsStats['crew'] = count(Crew::forTenant($pdo, (int) $tenantId, true));
             $opsStats['packages'] = count(PackageTemplate::forTenant($pdo, (int) $tenantId));
-            $today = date('Y-m-d');
-            foreach (ClientBook::forTenant($pdo, (int) $tenantId) as $booking) {
-                if (!in_array((string) ($booking['status'] ?? ''), ['inquiry', 'booked'], true)) {
-                    continue;
-                }
-                if (empty($booking['event_date']) || (string) $booking['event_date'] < $today) {
-                    continue;
-                }
-                $upcomingBookings[] = $booking;
-                if (count($upcomingBookings) >= 5) {
-                    break;
-                }
-            }
+            $opsStats['clients'] = count(ClientBook::forTenant($pdo, (int) $tenantId));
+
+            $stmt = $pdo->prepare(
+                "SELECT e.id, e.name, e.starts_at, e.venue, e.status,
+                        cb.client_name AS client_name
+                   FROM events e
+                   LEFT JOIN client_bookings cb ON cb.id = e.client_id
+                  WHERE e.tenant_id = :id
+                    AND e.status IN ('draft', 'active')
+                    AND e.starts_at IS NOT NULL
+                    AND DATE(e.starts_at) >= CURDATE()
+                  ORDER BY e.starts_at ASC
+                  LIMIT 5"
+            );
+            $stmt->execute(['id' => (int) $tenantId]);
+            $rows = $stmt->fetchAll();
+            $upcomingEvents = is_array($rows) ? $rows : [];
+
+            $stmt = $pdo->prepare(
+                "SELECT COUNT(*) FROM events
+                  WHERE tenant_id = :id AND status IN ('draft', 'active')
+                    AND starts_at IS NOT NULL AND DATE(starts_at) >= CURDATE()"
+            );
+            $stmt->execute(['id' => (int) $tenantId]);
+            $opsStats['upcoming_events'] = (int) $stmt->fetchColumn();
         } catch (PDOException) {
-            $upcomingBookings = [];
-            $opsStats = ['crew' => 0, 'packages' => 0, 'bookings_active' => 0, 'outstanding' => 0.0];
+            $upcomingEvents = [];
+            $opsStats = ['crew' => 0, 'packages' => 0, 'clients' => 0, 'upcoming_events' => 0];
         }
     }
 
@@ -2387,7 +2396,7 @@ $router->get('/tenant', static function (): void {
         'tenant' => $tenant,
         'counts' => $counts,
         'license' => $license,
-        'upcomingBookings' => $upcomingBookings,
+        'upcomingEvents' => $upcomingEvents,
         'opsStats' => $opsStats,
     ]);
 });
@@ -2974,12 +2983,42 @@ $router->get('/tenant/events/create', static function (): void {
     $user = Auth::requireRole('tenant_admin', 'tenant_staff');
 
     $driveAccounts = [];
+    $formClients = [];
+    $packageNames = [];
+    $values = Event::formValues();
     $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
     if ($pdo !== null) {
         try {
             $driveAccounts = Event::connectedAccounts($pdo);
         } catch (PDOException) {
             $driveAccounts = [];
+        }
+    }
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $formClients = ClientBook::forTenant($pdo, (int) $tenantId);
+            $packageNames = PackageTemplate::names($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $formClients = [];
+            $packageNames = [];
+        }
+        // Alur dari Buku Klien (v0.31.0): ?client_id= memilih
+        // klien dan mengawali nama event dari nama klien.
+        $presetClient = isset($_GET['client_id']) && is_numeric($_GET['client_id'])
+            ? (int) $_GET['client_id'] : 0;
+        if ($presetClient > 0) {
+            try {
+                $clientRow = ClientBook::findForTenant($pdo, (int) $tenantId, $presetClient);
+            } catch (PDOException) {
+                $clientRow = null;
+            }
+            if ($clientRow !== null) {
+                $values['client_id'] = (string) (int) $clientRow['id'];
+                if ((string) ($values['name'] ?? '') === '') {
+                    $values['name'] = (string) $clientRow['client_name'];
+                }
+            }
         }
     }
 
@@ -2989,9 +3028,11 @@ $router->get('/tenant/events/create', static function (): void {
         'flashes' => Flash::pull(),
         'heading' => 'Buat Event',
         'action' => '/tenant/events',
-        'values' => Event::formValues(),
+        'values' => $values,
         'errors' => [],
         'driveAccounts' => $driveAccounts,
+        'clients' => $formClients,
+        'packageNames' => $packageNames,
     ]);
 });
 
@@ -3007,13 +3048,19 @@ $router->post('/tenant/events', static function (): void {
     }
     $tenantId = (int) $tenantId;
 
-    [$data, $errors] = Event::validate($pdo, $_POST);
+    [$data, $errors] = Event::validate($pdo, $_POST, null, $tenantId);
     if ($errors !== []) {
         $driveAccounts = [];
+        $formClients = [];
+        $packageNames = [];
         try {
             $driveAccounts = Event::connectedAccounts($pdo);
+            $formClients = ClientBook::forTenant($pdo, $tenantId);
+            $packageNames = PackageTemplate::names($pdo, $tenantId);
         } catch (PDOException) {
             $driveAccounts = [];
+            $formClients = [];
+            $packageNames = [];
         }
         $flashes = Flash::pull();
         $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
@@ -3026,6 +3073,8 @@ $router->post('/tenant/events', static function (): void {
             'values' => Event::formValues(null, $_POST),
             'errors' => $errors,
             'driveAccounts' => $driveAccounts,
+            'clients' => $formClients,
+            'packageNames' => $packageNames,
         ], 422);
         return;
     }
@@ -3106,6 +3155,16 @@ $router->get('/tenant/events/{id}/edit', static function (array $params): void {
         }
     }
 
+    $formClients = [];
+    $packageNames = [];
+    try {
+        $formClients = ClientBook::forTenant($pdo, (int) $tenantId);
+        $packageNames = PackageTemplate::names($pdo, (int) $tenantId);
+    } catch (PDOException) {
+        $formClients = [];
+        $packageNames = [];
+    }
+
     View::render('tenant/events/form', [
         'appName' => Config::appName(),
         'user' => $user,
@@ -3115,6 +3174,8 @@ $router->get('/tenant/events/{id}/edit', static function (array $params): void {
         'values' => Event::formValues($event),
         'errors' => [],
         'driveAccounts' => $driveAccounts,
+        'clients' => $formClients,
+        'packageNames' => $packageNames,
     ]);
 });
 
@@ -3139,13 +3200,19 @@ $router->post('/tenant/events/{id}', static function (array $params): void {
         return;
     }
 
-    [$data, $errors] = Event::validate($pdo, $_POST, $event);
+    [$data, $errors] = Event::validate($pdo, $_POST, $event, (int) $tenantId);
     if ($errors !== []) {
         $driveAccounts = [];
+        $formClients = [];
+        $packageNames = [];
         try {
             $driveAccounts = Event::connectedAccounts($pdo);
+            $formClients = ClientBook::forTenant($pdo, (int) $tenantId);
+            $packageNames = PackageTemplate::names($pdo, (int) $tenantId);
         } catch (PDOException) {
             $driveAccounts = [];
+            $formClients = [];
+            $packageNames = [];
         }
         $flashes = Flash::pull();
         $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
@@ -3158,6 +3225,8 @@ $router->post('/tenant/events/{id}', static function (array $params): void {
             'values' => Event::formValues($event, $_POST),
             'errors' => $errors,
             'driveAccounts' => $driveAccounts,
+            'clients' => $formClients,
+            'packageNames' => $packageNames,
         ], 422);
         return;
     }
@@ -3377,11 +3446,14 @@ $router->post('/tenant/packages/{id}', static function (array $params): void {
  *   2. Manajemen Kru — anggota kru tenant + penugasan per event
  *      (crew_members + event_crew; penugasan diatur dari panel
  *      Kru Bertugas di Kelola Album).
- *   3. Buku Klien    — catatan klien & booking dengan nilai
- *      paket, DP, dan sisa pembayaran (client_bookings).
+ *   3. Buku Klien    — daftar klien saja (nama, WhatsApp,
+ *      alamat; client_bookings). Sejak v0.31.0 detail booking
+ *      (tanggal, paket, nilai, DP) tinggal di EVENT; alurnya
+ *      klien dicatat dulu, lalu event dibuat dari klien itu.
  * Tabel-tabelnya dibuat oleh migrasi
- * database/migrations/2026-11-11-tenant-ops.sql; sebelum
- * migrasi dijalankan halaman menampilkan petunjuknya.
+ * database/migrations/2026-11-11-tenant-ops.sql (+ perubahan
+ * alur oleh 2026-11-11-client-flow.sql); sebelum migrasi
+ * dijalankan halaman menampilkan petunjuknya.
  * ------------------------------------------------------------------- */
 
 $router->get('/tenant/package-catalog', static function (): void {
@@ -3745,17 +3817,18 @@ $router->post('/tenant/crew/{id}/delete', static function (array $params): void 
 $router->get('/tenant/clients', static function (): void {
     $user = Auth::requireRole('tenant_admin', 'tenant_staff');
 
-    $bookings = [];
-    $stats = ['active_count' => 0, 'active_total' => 0.0, 'outstanding' => 0.0];
+    $clients = [];
+    $clientEvents = [];
     $tablesMissing = false;
     $pdo = Database::pdo();
     $tenantId = $user['tenant_id'];
     $query = isset($_GET['q']) && is_string($_GET['q']) ? trim($_GET['q']) : '';
-    $status = isset($_GET['status']) && is_string($_GET['status']) ? $_GET['status'] : '';
     if ($pdo !== null && $tenantId !== null) {
         try {
-            $bookings = ClientBook::forTenant($pdo, (int) $tenantId, $query, $status);
-            $stats = ClientBook::stats($pdo, (int) $tenantId);
+            $clients = ClientBook::forTenant($pdo, (int) $tenantId, $query);
+            foreach ($clients as $clientRow) {
+                $clientEvents[(int) $clientRow['id']] = ClientBook::eventsForClient($pdo, (int) $clientRow['id']);
+            }
         } catch (PDOException) {
             $tablesMissing = true;
         }
@@ -3765,30 +3838,15 @@ $router->get('/tenant/clients', static function (): void {
         'appName' => Config::appName(),
         'user' => $user,
         'flashes' => Flash::pull(),
-        'bookings' => $bookings,
-        'stats' => $stats,
+        'clients' => $clients,
+        'clientEvents' => $clientEvents,
         'query' => $query,
-        'statusFilter' => $status,
         'tablesMissing' => $tablesMissing,
     ]);
 });
 
 $router->get('/tenant/clients/create', static function (): void {
     $user = Auth::requireRole('tenant_admin', 'tenant_staff');
-
-    $pdo = Database::pdo();
-    $tenantId = $user['tenant_id'];
-    $tenantEvents = [];
-    $packageNames = [];
-    if ($pdo !== null && $tenantId !== null) {
-        try {
-            $tenantEvents = Event::forTenant($pdo, (int) $tenantId);
-            $packageNames = PackageTemplate::names($pdo, (int) $tenantId);
-        } catch (PDOException) {
-            $tenantEvents = [];
-            $packageNames = [];
-        }
-    }
 
     View::render('tenant/clients/form', [
         'appName' => Config::appName(),
@@ -3798,8 +3856,6 @@ $router->get('/tenant/clients/create', static function (): void {
         'action' => '/tenant/clients',
         'values' => ClientBook::formValues(),
         'errors' => [],
-        'events' => $tenantEvents,
-        'packageNames' => $packageNames,
     ]);
 });
 
@@ -3815,17 +3871,8 @@ $router->post('/tenant/clients', static function (): void {
     }
     $tenantId = (int) $tenantId;
 
-    [$data, $errors] = ClientBook::validate($pdo, $tenantId, $_POST);
+    [$data, $errors] = ClientBook::validate($_POST);
     if ($errors !== []) {
-        $tenantEvents = [];
-        $packageNames = [];
-        try {
-            $tenantEvents = Event::forTenant($pdo, $tenantId);
-            $packageNames = PackageTemplate::names($pdo, $tenantId);
-        } catch (PDOException) {
-            $tenantEvents = [];
-            $packageNames = [];
-        }
         $flashes = Flash::pull();
         $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
         View::render('tenant/clients/form', [
@@ -3836,8 +3883,6 @@ $router->post('/tenant/clients', static function (): void {
             'action' => '/tenant/clients',
             'values' => ClientBook::formValues(null, $_POST),
             'errors' => $errors,
-            'events' => $tenantEvents,
-            'packageNames' => $packageNames,
         ], 422);
         return;
     }
@@ -3845,7 +3890,7 @@ $router->post('/tenant/clients', static function (): void {
     try {
         ClientBook::create($pdo, $tenantId, $data);
     } catch (PDOException) {
-        Flash::error('Klien gagal disimpan — pastikan migrasi database 2026-11-11-tenant-ops.sql sudah dijalankan.');
+        Flash::error('Klien gagal disimpan — pastikan migrasi database terbaru sudah dijalankan.');
         redirect('/tenant/clients');
     }
 
@@ -3859,13 +3904,9 @@ $router->get('/tenant/clients/{id}/edit', static function (array $params): void 
     $pdo = Database::pdo();
     $tenantId = $user['tenant_id'];
     $booking = null;
-    $tenantEvents = [];
-    $packageNames = [];
     if ($pdo !== null && $tenantId !== null) {
         try {
             $booking = ClientBook::findForTenant($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
-            $tenantEvents = Event::forTenant($pdo, (int) $tenantId);
-            $packageNames = PackageTemplate::names($pdo, (int) $tenantId);
         } catch (PDOException) {
             $booking = null;
         }
@@ -3886,8 +3927,6 @@ $router->get('/tenant/clients/{id}/edit', static function (array $params): void 
         'action' => '/tenant/clients/' . (int) $booking['id'],
         'values' => ClientBook::formValues($booking),
         'errors' => [],
-        'events' => $tenantEvents,
-        'packageNames' => $packageNames,
     ]);
 });
 
@@ -3913,17 +3952,8 @@ $router->post('/tenant/clients/{id}', static function (array $params): void {
         return;
     }
 
-    [$data, $errors] = ClientBook::validate($pdo, $tenantId, $_POST);
+    [$data, $errors] = ClientBook::validate($_POST);
     if ($errors !== []) {
-        $tenantEvents = [];
-        $packageNames = [];
-        try {
-            $tenantEvents = Event::forTenant($pdo, $tenantId);
-            $packageNames = PackageTemplate::names($pdo, $tenantId);
-        } catch (PDOException) {
-            $tenantEvents = [];
-            $packageNames = [];
-        }
         $flashes = Flash::pull();
         $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
         View::render('tenant/clients/form', [
@@ -3934,8 +3964,6 @@ $router->post('/tenant/clients/{id}', static function (array $params): void {
             'action' => '/tenant/clients/' . $id,
             'values' => ClientBook::formValues($booking, $_POST),
             'errors' => $errors,
-            'events' => $tenantEvents,
-            'packageNames' => $packageNames,
         ], 422);
         return;
     }

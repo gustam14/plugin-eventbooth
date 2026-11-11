@@ -232,14 +232,21 @@ CREATE TABLE events (
     retention_override_days INT NULL DEFAULT NULL COMMENT 'Override retensi album (hari) per event; NULL = ikut plan tenant (v0.20.0)',
     retention_emptied_at DATETIME NULL DEFAULT NULL COMMENT 'Kapan album dikosongkan retensi; publik tampil Expired, event dibersihkan 30 hari kemudian (v0.22.0)',
     banner_image         VARCHAR(255) NULL COMMENT 'Nama berkas banner khusus event di storage/banners (v0.25.0)',
+    client_id            BIGINT UNSIGNED NULL COMMENT 'Klien dari Buku Klien (v0.31.0)',
+    client_package_name  VARCHAR(120) NULL COMMENT 'Paket layanan yang diambil klien (dari Daftar Paket)',
+    client_total_price   DECIMAL(12,2) NULL COMMENT 'Nilai paket klien',
+    client_dp_paid       DECIMAL(12,2) NULL COMMENT 'DP yang sudah dibayar klien',
     created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uq_events_slug (slug),
     KEY idx_events_tenant (tenant_id),
     KEY idx_events_drive_account (drive_account_id),
+    KEY idx_events_client (client_id),
     CONSTRAINT fk_events_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
     CONSTRAINT fk_events_drive_account FOREIGN KEY (drive_account_id) REFERENCES google_accounts (id) ON DELETE SET NULL
+    -- fk_events_client ditambahkan setelah tabel client_bookings
+    -- dibuat (lihat ALTER TABLE di bawah definisi client_bookings).
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
@@ -314,28 +321,22 @@ CREATE TABLE event_crew (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE client_bookings (
-    id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    tenant_id    BIGINT UNSIGNED NOT NULL,
-    client_name  VARCHAR(120) NOT NULL COMMENT 'Nama klien, mis. nama pasangan / perusahaan',
-    contact_name VARCHAR(120) NULL COMMENT 'Nama penanggung jawab / yang dapat dihubungi',
-    whatsapp     VARCHAR(32) NULL,
-    email        VARCHAR(120) NULL,
-    event_date   DATE NULL,
-    venue        VARCHAR(160) NULL,
-    package_name VARCHAR(120) NULL COMMENT 'Nama paket yang diambil (teks bebas)',
-    total_price  DECIMAL(12,2) NOT NULL DEFAULT 0,
-    dp_paid      DECIMAL(12,2) NOT NULL DEFAULT 0,
-    status       ENUM('inquiry','booked','done','cancelled') NOT NULL DEFAULT 'inquiry',
-    event_id     BIGINT UNSIGNED NULL COMMENT 'Event galeri terkait (bila sudah dibuat)',
-    notes        TEXT NULL,
-    created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    tenant_id   BIGINT UNSIGNED NOT NULL,
+    client_name VARCHAR(120) NOT NULL COMMENT 'Nama klien, mis. nama pasangan / perusahaan',
+    whatsapp    VARCHAR(32) NULL,
+    address     VARCHAR(255) NULL,
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     KEY idx_client_bookings_tenant (tenant_id),
-    KEY idx_client_bookings_event (event_id),
-    CONSTRAINT fk_client_bookings_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
-    CONSTRAINT fk_client_bookings_event FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE SET NULL
+    CONSTRAINT fk_client_bookings_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Klien pada event (v0.31.0): FK ditambahkan di sini karena
+-- client_bookings didefinisikan setelah events pada berkas ini.
+ALTER TABLE events
+    ADD CONSTRAINT fk_events_client FOREIGN KEY (client_id) REFERENCES client_bookings (id) ON DELETE SET NULL;
 
 -- ---------------------------------------------------------------------
 -- Sesi foto tamu. code = kode sesi untuk URL /s/{kode} dan QR.

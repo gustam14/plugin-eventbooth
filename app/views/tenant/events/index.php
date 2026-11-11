@@ -60,6 +60,22 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
                 <td>
                     <strong><?= e((string) $event['name']) ?></strong><br>
                     <span style="color: var(--muted); font-size: 13px;">/e/<?= e((string) $event['slug']) ?></span>
+                    <?php if (!empty($event['client_name'])): ?>
+                        <br><span style="color: var(--muted); font-size: 13px;">Klien: <?= e((string) $event['client_name']) ?></span>
+                    <?php endif; ?>
+                    <?php if (!empty($event['client_package_name'])): ?>
+                        <br><span style="color: var(--muted); font-size: 13px;">Paket: <?= e((string) $event['client_package_name']) ?></span>
+                    <?php endif; ?>
+                    <?php $clientRemaining = Event::clientRemaining($event); ?>
+                    <?php if ($clientRemaining !== null): ?>
+                        <br><span style="font-size: 13px;">
+                            <?php if ($clientRemaining > 0): ?>
+                                Sisa klien: <strong><?= e(Package::formatPrice($clientRemaining)) ?></strong>
+                            <?php else: ?>
+                                <span class="status-on">Klien lunas</span>
+                            <?php endif; ?>
+                        </span>
+                    <?php endif; ?>
                 </td>
                 <td><?= e(License::formatDateId(isset($event['starts_at']) ? (string) $event['starts_at'] : null)) ?></td>
                 <td><span class="<?= e(Event::statusBadgeClass($status)) ?>"><?= e(Event::statusLabel($status)) ?></span></td>

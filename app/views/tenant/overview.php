@@ -11,8 +11,8 @@
  * @var array<string, mixed>|null $tenant Baris tenant milik pengguna (atau null).
  * @var array{events: int, licenses: int, sessions: int} $counts Jumlah milik tenant ini saja.
  * @var array{plan_name: string, status: string, expires_at: ?string}|null $license Lisensi terakhir tenant.
- * @var array<int, array<string, mixed>> $upcomingBookings Booking mendatang (maks 5).
- * @var array{crew: int, packages: int, bookings_active: int, outstanding: float} $opsStats
+ * @var array<int, array<string, mixed>> $upcomingEvents Event mendatang (maks 5).
+ * @var array{crew: int, packages: int, clients: int, upcoming_events: int} $opsStats
  */
 
 $title = 'Beranda';
@@ -48,41 +48,34 @@ $statusLabel = static function (?string $status): string {
 </div>
 
 <div class="panel-box" style="margin-bottom: 22px;">
-    <h2 style="font-size: 18px; margin-bottom: 6px;">Booking Terdekat</h2>
-    <?php if (($upcomingBookings ?? []) === []): ?>
-        <p style="color: var(--muted); margin-bottom: 12px;">Belum ada booking mendatang yang tercatat. Catat klienmu di Buku Klien agar tanggal acara dan sisa pembayaran selalu terpantau di sini.</p>
-        <a class="btn btn-small" href="/tenant/clients/create">+ Catat Klien</a>
+    <h2 style="font-size: 18px; margin-bottom: 6px;">Event Terdekat</h2>
+    <?php if (($upcomingEvents ?? []) === []): ?>
+        <p style="color: var(--muted); margin-bottom: 12px;">Belum ada event mendatang yang terjadwal. Catat klien di Buku Klien, lalu buat event-nya dari klien itu agar jadwalmu terpantau di sini.</p>
+        <a class="btn btn-small" href="/tenant/clients">Buka Buku Klien</a>
     <?php else: ?>
         <div class="table-wrap">
         <table class="list">
             <thead>
-            <tr><th>Tanggal</th><th>Klien</th><th>Paket</th><th>Sisa</th></tr>
+            <tr><th>Tanggal</th><th>Event</th><th>Klien</th><th>Status</th></tr>
             </thead>
             <tbody>
-            <?php foreach ($upcomingBookings as $booking): ?>
-                <?php $remaining = ClientBook::remaining($booking); ?>
+            <?php foreach ($upcomingEvents as $upcomingEvent): ?>
                 <tr>
-                    <td><?= e(License::formatDateId((string) $booking['event_date'])) ?></td>
+                    <td><?= e(License::formatDateId((string) $upcomingEvent['starts_at'])) ?></td>
                     <td>
-                        <strong><?= e((string) $booking['client_name']) ?></strong>
-                        <?php if (!empty($booking['venue'])): ?>
-                            <div class="hint"><?= e((string) $booking['venue']) ?></div>
+                        <strong><a href="/tenant/events/<?= (int) $upcomingEvent['id'] ?>/album"><?= e((string) $upcomingEvent['name']) ?></a></strong>
+                        <?php if (!empty($upcomingEvent['venue'])): ?>
+                            <div class="hint"><?= e((string) $upcomingEvent['venue']) ?></div>
                         <?php endif; ?>
                     </td>
-                    <td><?= e((string) ($booking['package_name'] ?? '—')) ?></td>
-                    <td>
-                        <?php if ($remaining > 0): ?>
-                            <?= e(Package::formatPrice($remaining)) ?>
-                        <?php else: ?>
-                            <span class="status-on">Lunas</span>
-                        <?php endif; ?>
-                    </td>
+                    <td><?= e((string) ($upcomingEvent['client_name'] ?? '—')) ?></td>
+                    <td><span class="<?= e(Event::statusBadgeClass((string) ($upcomingEvent['status'] ?? 'draft'))) ?>"><?= e(Event::statusLabel((string) ($upcomingEvent['status'] ?? 'draft'))) ?></span></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
         </table>
         </div>
-        <p style="margin-top: 12px;"><a class="btn btn-small" href="/tenant/clients">Buka Buku Klien</a></p>
+        <p style="margin-top: 12px;"><a class="btn btn-small" href="/tenant/events">Buka Daftar Event</a></p>
     <?php endif; ?>
 </div>
 
@@ -98,12 +91,12 @@ $statusLabel = static function (?string $status): string {
             <strong style="font-size: 20px;"><?= (int) ($opsStats['packages'] ?? 0) ?> paket</strong>
         </div>
         <div>
-            <div class="hint">Booking berjalan</div>
-            <strong style="font-size: 20px;"><?= (int) ($opsStats['bookings_active'] ?? 0) ?> klien</strong>
+            <div class="hint">Klien tercatat</div>
+            <strong style="font-size: 20px;"><?= (int) ($opsStats['clients'] ?? 0) ?> klien</strong>
         </div>
         <div>
-            <div class="hint">Sisa belum lunas</div>
-            <strong style="font-size: 20px;"><?= e(Package::formatPrice($opsStats['outstanding'] ?? 0)) ?></strong>
+            <div class="hint">Event mendatang</div>
+            <strong style="font-size: 20px;"><?= (int) ($opsStats['upcoming_events'] ?? 0) ?> event</strong>
         </div>
     </div>
     <div style="display: flex; flex-wrap: wrap; gap: 8px;">
