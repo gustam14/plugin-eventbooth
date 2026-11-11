@@ -28,24 +28,32 @@ $isAdmin = (string) ($user['role'] ?? '') === 'tenant_admin';
 $s = $settings ?? Notify::defaults();
 ?>
 <p class="sub">
-    Atur pesan WhatsApp usahamu di sini. Semua pesan dikirim otomatis lewat gateway
-    WhatsApp platform (MPWA) — kamu tidak perlu menyiapkan nomor atau API key sendiri.
+    Atur pesan WhatsApp usahamu di sini. Semua pesan dikirim dari <strong>nomor WhatsApp milikmu sendiri</strong>
+    lewat gateway MPWA (wa.eventbooth.id) — bukan dari nomor platform. Isi API key &amp; nomor pengirim
+    akun MPWA-mu pada bagian Gateway di bawah.
 </p>
 
 <?php if (!empty($tablesMissing)): ?>
     <div class="panel-box">
         <p>Fitur ini belum aktif di database. Jalankan berkas migrasi
-            <strong>database/migrations/2026-11-11-notifications.sql</strong>
+            <strong>database/migrations/2026-11-11-notifications.sql</strong> dan
+            <strong>database/migrations/2026-11-11-tenant-mpwa.sql</strong>
             sekali di phpMyAdmin pada database plugin, lalu muat ulang halaman ini.</p>
     </div>
 <?php else: ?>
 
 <div class="panel-box" style="margin-bottom: 22px;">
-    <h2 style="font-size: 18px; margin-bottom: 6px;">Status Gateway WhatsApp</h2>
+    <h2 style="font-size: 18px; margin-bottom: 6px;">Gateway WhatsApp Kamu (MPWA)</h2>
     <?php if (!empty($gatewayReady)): ?>
-        <p><span class="status-on">Terhubung</span> — gateway platform siap mengirim pesan dari nomor pengirim platform.</p>
+        <p><span class="status-on">Terhubung</span> — pesan notifikasi terkirim dari nomormu sendiri: <strong><?= e((string) ($s['mpwa_sender'] ?? '')) ?></strong>.</p>
     <?php else: ?>
-        <p><span class="status-warn">Belum diatur admin</span> — API key / nomor pengirim platform belum lengkap, jadi pesan belum bisa terkirim. Pengaturan &amp; template di bawah tetap bisa kamu simpan lebih dulu.</p>
+        <p><span class="status-warn">Belum lengkap</span> — isi <strong>Nomor Pengirim</strong> dan <strong>API Key MPWA</strong> milikmu pada formulir Pengaturan di bawah (bagian 0), lalu simpan. Ambil API key dari panel MPWA kamu di wa.eventbooth.id (menu API / profil akun), dan pastikan nomor perangkatmu terhubung di sana.</p>
+    <?php endif; ?>
+    <?php if ($isAdmin): ?>
+        <form method="post" action="/tenant/notifications/test-send" style="margin-top: 10px;">
+            <?= Auth::csrfField() ?>
+            <button class="btn btn-small" type="submit">Kirim Pesan Tes ke WhatsApp Saya</button>
+        </form>
     <?php endif; ?>
 </div>
 
@@ -56,6 +64,26 @@ $s = $settings ?? Notify::defaults();
     <?php endif; ?>
     <form method="post" action="/tenant/notifications">
         <?= Auth::csrfField() ?>
+
+        <fieldset>
+            <legend>0 · Gateway MPWA Milikmu</legend>
+            <div class="form-grid">
+                <div class="field">
+                    <label for="mpwa_sender">Nomor Pengirim (perangkat MPWA kamu)</label>
+                    <input type="text" id="mpwa_sender" name="mpwa_sender" maxlength="32" inputmode="tel"
+                           placeholder="08xxxxxxxxxx"
+                           value="<?= e((string) ($s['mpwa_sender'] ?? '')) ?>" <?= $isAdmin ? '' : 'disabled' ?>>
+                    <div class="hint">Nomor WhatsApp yang terhubung sebagai perangkat di akun MPWA kamu — dari nomor inilah semua notifikasi terkirim.</div>
+                </div>
+                <div class="field">
+                    <label for="mpwa_api_key">API Key MPWA</label>
+                    <input type="password" id="mpwa_api_key" name="mpwa_api_key" autocomplete="off"
+                           placeholder="<?= !empty($s['mpwa_api_key_set']) ? 'Sudah tersimpan — isi hanya bila ingin mengganti' : 'API key dari panel MPWA kamu' ?>"
+                           <?= $isAdmin ? '' : 'disabled' ?>>
+                    <div class="hint">Tersimpan terenkripsi di server<?= !empty($s['mpwa_api_key_set']) ? ' (saat ini: <strong>sudah diatur</strong>)' : '' ?>. Kosongkan bila tidak ingin mengganti.</div>
+                </div>
+            </div>
+        </fieldset>
 
         <fieldset>
             <legend>1 · Berbagi Galeri dari Aplikasi Booth</legend>
@@ -184,7 +212,7 @@ $s = $settings ?? Notify::defaults();
         <div class="table-wrap">
         <table class="list">
             <thead>
-            <tr><th>Waktu</th><th>Nama</th><th>WhatsApp</th><th>Tanggal Acara</th><th>Paket</th><th>Hasil Otomatis</th></tr>
+            <tr><th>Waktu</th><th>Nama</th><th>WhatsApp</th><th>Nama Acara</th><th>Tanggal</th><th>Paket</th><th>DP</th><th>Hasil Otomatis</th></tr>
             </thead>
             <tbody>
             <?php foreach ($requests as $request): ?>
@@ -192,8 +220,10 @@ $s = $settings ?? Notify::defaults();
                     <td><?= e(License::formatDateId((string) ($request['created_at'] ?? ''))) ?></td>
                     <td><strong><?= e((string) $request['name']) ?></strong></td>
                     <td><?= e((string) ($request['whatsapp'] ?? '—')) ?></td>
-                    <td><?= !empty($request['event_date']) ? e(License::formatDateId((string) $request['event_date'])) : '—' ?></td>
+                    <td><?= e((string) ($request['event_name'] ?? '—')) ?></td>
+                    <td><?= !empty($request['event_date']) ? e(License::formatDateId((string) $request['event_date'])) : '—' ?><?= !empty($request['start_time']) ? ' · ' . e(substr((string) $request['start_time'], 0, 5)) : '' ?></td>
                     <td><?= e((string) ($request['package_name'] ?? '—')) ?></td>
+                    <td><?= isset($request['dp_amount']) && $request['dp_amount'] !== null ? e(Package::formatPrice($request['dp_amount'])) : '—' ?></td>
                     <td>
                         <?php if (!empty($request['event_id'])): ?>
                             <a href="/tenant/events/<?= (int) $request['event_id'] ?>/edit">Event draf #<?= (int) $request['event_id'] ?></a>

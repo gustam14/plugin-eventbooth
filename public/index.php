@@ -3470,7 +3470,8 @@ $router->get('/tenant/notifications', static function (): void {
             $tenant = Tenant::find($pdo, (int) $tenantId);
             $settings = Notify::settings($pdo, (int) $tenantId);
             $requests = Notify::requests($pdo, (int) $tenantId);
-            $gatewayReady = Notify::gatewayReady($pdo);
+            // Gateway yang dipakai = MPWA milik tenant sendiri.
+            $gatewayReady = Mpwa::tenantGatewayReady($pdo, (int) $tenantId);
             // Migrasi belum jalan bila tabel pengaturan tidak ada.
             $pdo->query('SELECT 1 FROM tenant_notifications LIMIT 1');
         } catch (PDOException) {
@@ -3520,15 +3521,49 @@ $router->post('/tenant/notifications', static function (): void {
 
     [$data, $errors] = Notify::validateSettings($_POST);
     if ($errors !== []) {
-        Flash::error('Periksa kembali template pesanmu: ' . implode(' ', array_values($errors)));
+        Flash::error('Periksa kembali isianmu: ' . implode(' ', array_values($errors)));
         redirect('/tenant/notifications');
     }
 
     try {
         Notify::save($pdo, (int) $tenantId, $data);
+        // API key MPWA tenant: kosong = biarkan yang tersimpan;
+        // terisi = ganti (tersimpan terenkripsi).
+        $apiKeyPlain = trim((string) ($_POST['mpwa_api_key'] ?? ''));
+        if ($apiKeyPlain !== '') {
+            Mpwa::saveTenantApiKey($pdo, (int) $tenantId, $apiKeyPlain);
+        }
         Flash::success('Pengaturan notifikasi tersimpan.');
+    } catch (MidtransException) {
+        Flash::error('API key MPWA tidak dapat disimpan terenkripsi — hubungi admin platform.');
     } catch (PDOException) {
-        Flash::error('Pengaturan gagal disimpan — pastikan migrasi database 2026-11-11-notifications.sql sudah dijalankan.');
+        Flash::error('Pengaturan gagal disimpan — pastikan migrasi database terbaru (notifikasi & gateway tenant) sudah dijalankan.');
+    }
+    redirect('/tenant/notifications');
+});
+
+$router->post('/tenant/notifications/test-send', static function (): void {
+    $user = Auth::requireRole('tenant_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel.');
+        redirect('/tenant/notifications');
+    }
+    $tenant = Tenant::find($pdo, (int) $tenantId);
+    $number = $tenant !== null ? Tenant::whatsappOf($tenant) : null;
+    if ($tenant === null || $number === null) {
+        Flash::error('Nomor WhatsApp tenantmu belum tercatat di platform, jadi tes kirim belum bisa dilakukan.');
+        redirect('/tenant/notifications');
+    }
+    $message = 'Tes notifikasi Plugin Eventbooth: gateway WhatsApp *' . Tenant::displayName($tenant) . '* terhubung dengan benar. '
+        . 'Mulai sekarang notifikasi ke klien & kru dikirim dari nomor ini.';
+    if (Mpwa::sendTextForTenant($pdo, (int) $tenantId, $number, $message)) {
+        Flash::success('Pesan tes terkirim ke WhatsApp kamu (' . $number . '). Gateway milikmu aktif.');
+    } else {
+        Flash::error('Pesan tes belum terkirim — periksa API key, nomor pengirim, dan status perangkatmu di panel MPWA.');
     }
     redirect('/tenant/notifications');
 });
@@ -3553,10 +3588,10 @@ $router->post('/tenant/notifications/send-reminder', static function (): void {
         Flash::error('Event ini tidak memiliki klien dengan nomor WhatsApp.');
         redirect('/tenant/notifications');
     }
-    if (Mpwa::sendText($pdo, (string) $client['whatsapp'], Notify::reminderMessage($tenant, $event, $client))) {
+    if (Mpwa::sendTextForTenant($pdo, (int) $tenantId, (string) $client['whatsapp'], Notify::reminderMessage($tenant, $event, $client))) {
         Flash::success('Pengingat pembayaran terkirim ke WhatsApp ' . (string) $client['client_name'] . '.');
     } else {
-        Flash::error('Pesan belum terkirim — gateway WhatsApp platform belum diatur atau sedang gangguan. Coba lagi nanti.');
+        Flash::error('Pesan belum terkirim — gateway WhatsApp milikmu belum diatur lengkap (API key + nomor pengirim) atau sedang gangguan. Cek bagian Gateway WhatsApp di atas.');
     }
     redirect('/tenant/notifications');
 });
@@ -3581,10 +3616,10 @@ $router->post('/tenant/notifications/send-album', static function (): void {
         Flash::error('Event ini tidak memiliki klien dengan nomor WhatsApp.');
         redirect('/tenant/notifications');
     }
-    if (Mpwa::sendText($pdo, (string) $client['whatsapp'], Notify::albumMessage($tenant, $event))) {
+    if (Mpwa::sendTextForTenant($pdo, (int) $tenantId, (string) $client['whatsapp'], Notify::albumMessage($tenant, $event))) {
         Flash::success('Tautan album terkirim ke WhatsApp ' . (string) $client['client_name'] . '.');
     } else {
-        Flash::error('Pesan belum terkirim — gateway WhatsApp platform belum diatur atau sedang gangguan. Coba lagi nanti.');
+        Flash::error('Pesan belum terkirim — gateway WhatsApp milikmu belum diatur lengkap (API key + nomor pengirim) atau sedang gangguan. Cek bagian Gateway WhatsApp di atas.');
     }
     redirect('/tenant/notifications');
 });
@@ -3628,7 +3663,7 @@ $router->get('/booking/{slug}', static function (array $params): void {
         'tenant' => $tenant,
         'formEnabled' => !empty($settings['booking_form_enabled']),
         'packages' => $packages,
-        'values' => ['name' => '', 'whatsapp' => '', 'address' => '', 'event_date' => '', 'package_id' => '', 'notes' => ''],
+        'values' => ['name' => '', 'whatsapp' => '', 'address' => '', 'event_name' => '', 'event_date' => '', 'start_time' => '', 'dp' => '', 'package_id' => '', 'notes' => ''],
         'errors' => [],
         'submitted' => false,
     ]);
@@ -3682,7 +3717,10 @@ $router->post('/booking/{slug}', static function (array $params): void {
         'name' => trim((string) ($_POST['name'] ?? '')),
         'whatsapp' => trim((string) ($_POST['whatsapp'] ?? '')),
         'address' => trim((string) ($_POST['address'] ?? '')),
+        'event_name' => trim((string) ($_POST['event_name'] ?? '')),
         'event_date' => trim((string) ($_POST['event_date'] ?? '')),
+        'start_time' => trim((string) ($_POST['start_time'] ?? '')),
+        'dp' => trim((string) ($_POST['dp'] ?? '')),
         'package_id' => isset($_POST['package_id']) && is_numeric($_POST['package_id']) ? (string) (int) $_POST['package_id'] : '',
         'notes' => trim((string) ($_POST['notes'] ?? '')),
     ];
@@ -3711,6 +3749,19 @@ $router->post('/booking/{slug}', static function (array $params): void {
         $errors['event_date'] = 'Tanggal acara tidak sah.';
         $values['event_date'] = '';
     }
+    if ($values['start_time'] !== '' && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $values['start_time']) !== 1) {
+        $errors['start_time'] = 'Jam mulai tidak sah.';
+        $values['start_time'] = '';
+    }
+    $dpAmount = null;
+    if ($values['dp'] !== '') {
+        [$dpParsed, $dpError] = PackageTemplate::parseMoney($values['dp']);
+        if ($dpError !== null) {
+            $errors['dp'] = 'DP: ' . $dpError;
+        } else {
+            $dpAmount = $dpParsed;
+        }
+    }
     if ($errors !== []) {
         $renderForm($values, $errors, false);
         return;
@@ -3731,6 +3782,10 @@ $router->post('/booking/{slug}', static function (array $params): void {
         } catch (PDOException) {
             $packageName = null;
         }
+    }
+    if ($dpAmount !== null && $packagePrice !== null && $dpAmount > $packagePrice) {
+        $renderForm($values, ['dp' => 'DP tidak boleh melebihi harga paket yang dipilih.'], false);
+        return;
     }
 
     // Kiriman ganda dari nomor+tanggal yang sama dalam 10
@@ -3769,21 +3824,26 @@ $router->post('/booking/{slug}', static function (array $params): void {
         $clientId = null;
     }
 
-    // 2) Event draf otomatis dari booking ini.
+    // 2) Event draf otomatis dari booking ini. Nama acara
+    //    dari isian calon klien (cadangan: nama klien); lokasi
+    //    dari kolom Share Lokasi; jam mulai dari isian (bawaan
+    //    09:00); DP masuk sebagai DP klien pada event.
     $eventId = null;
     try {
         [$eventData, $eventErrors] = Event::validate($pdo, [
-            'name' => $values['name'],
+            'name' => $values['event_name'] !== '' ? $values['event_name'] : $values['name'],
             'slug' => '',
-            'venue' => '',
-            'starts_at' => $values['event_date'] !== '' ? $values['event_date'] . ' 09:00' : '',
+            'venue' => $values['address'],
+            'starts_at' => $values['event_date'] !== ''
+                ? $values['event_date'] . ' ' . ($values['start_time'] !== '' ? $values['start_time'] : '09:00')
+                : '',
             'ends_at' => '',
             'status' => 'draft',
             'client_id' => $clientId !== null ? (string) $clientId : '',
             'client_package_name' => $packageName ?? '',
             'client_total_price' => $packagePrice !== null ? (string) (int) $packagePrice : '',
             'client_discount' => '',
-            'client_dp_paid' => '',
+            'client_dp_paid' => $dpAmount !== null ? (string) (int) $dpAmount : '',
         ], null, $tenantId);
         if ($eventErrors === []) {
             $eventId = Event::create($pdo, $tenantId, $eventData);
@@ -3802,6 +3862,9 @@ $router->post('/booking/{slug}', static function (array $params): void {
         'event_date' => $values['event_date'] !== '' ? $values['event_date'] : null,
         'package_name' => $packageName,
         'notes' => $values['notes'] !== '' ? $values['notes'] : null,
+        'event_name' => $values['event_name'] !== '' ? $values['event_name'] : null,
+        'start_time' => $values['start_time'] !== '' ? $values['start_time'] . ':00' : null,
+        'dp_amount' => $dpAmount,
     ];
     Notify::logRequest($pdo, $tenantId, $requestData);
     Notify::notifyOwnerNewBooking($pdo, $tenantId, $requestData);
@@ -7685,11 +7748,10 @@ $router->post('/api/payment/notification', static function () use ($readJsonBody
 $router->post('/api/session/register', $stub('Registrasi metadata sesi — Milestone 5.'));
 /**
  * Kirim tautan galeri sesi ke WhatsApp tamu (fitur plan
- * whatsapp_share) lewat gateway MPWA platform. Dipanggil
- * aplikasi dari layar selesai kios setelah tamu mengisi
- * nomornya. Pengiriman tercatat sebagai upaya terbaik gateway
- * platform — nomor pengirim & API key diatur Super Admin di
- * /admin/payments, sama seperti notifikasi lunas lisensi.
+ * whatsapp_share) lewat gateway MPWA MILIK TENANT (v0.34.0:
+ * API key & nomor pengirim diatur tenant sendiri di menu
+ * Notifikasi — bukan nomor Super Admin). Dipanggil aplikasi
+ * dari layar selesai kios setelah tamu mengisi nomornya.
  */
 $router->post('/api/session/share-wa', static function () use ($appDeviceContext, $readJsonBody): void {
     [$pdo, $device, $license, $tenant] = $appDeviceContext();
@@ -7738,9 +7800,9 @@ $router->post('/api/session/share-wa', static function () use ($appDeviceContext
         'nama_vendor' => (string) ($tenant['vendor_name'] ?? 'Photobooth'),
     ]);
 
-    if (!Mpwa::sendText($pdo, $number, $message)) {
+    if (!Mpwa::sendTextForTenant($pdo, $tenantId, $number, $message)) {
         Json::error(
-            'Pesan WhatsApp belum terkirim (gateway platform belum diatur atau sedang gangguan). Tautan tetap dapat dibagikan lewat QR di layar.',
+            'Pesan WhatsApp belum terkirim (gateway WhatsApp tenant belum diatur di menu Notifikasi atau sedang gangguan). Tautan tetap dapat dibagikan lewat QR di layar.',
             502,
             'whatsapp_send_failed'
         );

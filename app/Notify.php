@@ -10,11 +10,12 @@ declare(strict_types=1);
  * Klien + Event, plus pemberitahuan ke pemilik usaha saat
  * form booking masuk.
  *
- * Semua pengiriman dijembatani MPWA platform
- * (Mpwa::sendText — API key & nomor pengirim diatur Super
- * Admin) dan bersifat best-effort: kegagalan gateway atau
- * tabel yang belum dimigrasi tidak pernah menggagalkan
- * alur utama.
+ * Semua pengiriman dijembatani MPWA (wa.eventbooth.id)
+ * memakai API key & nomor pengirim MILIK TENANT SENDIRI
+ * (Mpwa::sendTextForTenant — keputusan pemilik v0.34.0:
+ * notifikasi tenant tidak memakai nomor Super Admin) dan
+ * bersifat best-effort: kegagalan gateway atau tabel yang
+ * belum dimigrasi tidak pernah menggagalkan alur utama.
  */
 final class Notify
 {
@@ -34,6 +35,8 @@ final class Notify
             'crew_template' => self::DEFAULT_CREW,
             'booking_form_enabled' => false,
             'owner_notify_enabled' => true,
+            'mpwa_sender' => '',
+            'mpwa_api_key_set' => false,
         ];
     }
 
@@ -61,6 +64,8 @@ final class Notify
         $settings['crew_enabled'] = (int) ($row['crew_enabled'] ?? 0) === 1;
         $settings['booking_form_enabled'] = (int) ($row['booking_form_enabled'] ?? 0) === 1;
         $settings['owner_notify_enabled'] = (int) ($row['owner_notify_enabled'] ?? 1) === 1;
+        $settings['mpwa_sender'] = isset($row['mpwa_sender']) ? (string) $row['mpwa_sender'] : '';
+        $settings['mpwa_api_key_set'] = Mpwa::tenantApiKey($pdo, $tenantId) !== null;
         foreach (['share_template', 'client_template', 'crew_template'] as $field) {
             $stored = isset($row[$field]) ? trim((string) $row[$field]) : '';
             if ($stored !== '') {
@@ -87,6 +92,19 @@ final class Notify
             'booking_form_enabled' => isset($input['booking_form_enabled']),
             'owner_notify_enabled' => isset($input['owner_notify_enabled']),
         ];
+        // Gateway MPWA milik tenant: nomor pengirim perangkat
+        // mereka (API key ditangani terpisah, terenkripsi).
+        $senderRaw = trim((string) ($input['mpwa_sender'] ?? ''));
+        if ($senderRaw === '') {
+            $data['mpwa_sender'] = null;
+        } else {
+            $normalizedSender = Whatsapp::normalize($senderRaw);
+            if ($normalizedSender === null) {
+                $errors['mpwa_sender'] = 'Nomor pengirim MPWA tidak sah (gunakan format 08… atau 628…).';
+            }
+            $data['mpwa_sender'] = $normalizedSender;
+        }
+
         $defaults = [
             'share_template' => self::DEFAULT_SHARE,
             'client_template' => self::DEFAULT_CLIENT,
@@ -113,10 +131,10 @@ final class Notify
         $stmt = $pdo->prepare(
             'INSERT INTO tenant_notifications
                 (tenant_id, share_enabled, share_template, client_enabled, client_template,
-                 crew_enabled, crew_template, booking_form_enabled, owner_notify_enabled)
+                 crew_enabled, crew_template, booking_form_enabled, owner_notify_enabled, mpwa_sender)
              VALUES
                 (:tenant_id, :share_enabled, :share_template, :client_enabled, :client_template,
-                 :crew_enabled, :crew_template, :booking_form_enabled, :owner_notify_enabled)
+                 :crew_enabled, :crew_template, :booking_form_enabled, :owner_notify_enabled, :mpwa_sender)
              ON DUPLICATE KEY UPDATE
                 share_enabled = VALUES(share_enabled),
                 share_template = VALUES(share_template),
@@ -125,7 +143,8 @@ final class Notify
                 crew_enabled = VALUES(crew_enabled),
                 crew_template = VALUES(crew_template),
                 booking_form_enabled = VALUES(booking_form_enabled),
-                owner_notify_enabled = VALUES(owner_notify_enabled)'
+                owner_notify_enabled = VALUES(owner_notify_enabled),
+                mpwa_sender = VALUES(mpwa_sender)'
         );
         $stmt->execute([
             'tenant_id' => $tenantId,
@@ -137,6 +156,7 @@ final class Notify
             'crew_template' => $data['crew_template'],
             'booking_form_enabled' => !empty($data['booking_form_enabled']) ? 1 : 0,
             'owner_notify_enabled' => !empty($data['owner_notify_enabled']) ? 1 : 0,
+            'mpwa_sender' => $data['mpwa_sender'] ?? null,
         ]);
     }
 
@@ -151,19 +171,9 @@ final class Notify
         return strtr($template, $map);
     }
 
-    /** Apakah gateway MPWA platform siap (API key + pengirim diatur Super Admin). */
-    public static function gatewayReady(PDO $pdo): bool
-    {
-        try {
-            return Mpwa::apiKey($pdo) !== null
-                && Whatsapp::normalize(Settings::get($pdo, 'mpwa_sender')) !== null;
-        } catch (Throwable) {
-            return false;
-        }
-    }
-
     /* -----------------------------------------------------------------
-     * Pengiriman-pengiriman
+     * Pengiriman-pengiriman (semua lewat gateway MPWA milik
+     * tenant sendiri — v0.34.0)
      * --------------------------------------------------------------- */
 
     /** WA konfirmasi booking ke klien (saat event untuknya dibuat). */
@@ -193,7 +203,7 @@ final class Notify
                 'nama_vendor' => Tenant::displayName($tenant),
             ]);
 
-            return Mpwa::sendText($pdo, (string) $client['whatsapp'], $message);
+            return Mpwa::sendTextForTenant($pdo, $tenantId, (string) $client['whatsapp'], $message);
         } catch (Throwable) {
             return false;
         }
@@ -229,7 +239,7 @@ final class Notify
                     'venue' => (string) ($event['venue'] ?? '—'),
                     'nama_vendor' => Tenant::displayName($tenant),
                 ]);
-                if (Mpwa::sendText($pdo, (string) $member['phone'], $message)) {
+                if (Mpwa::sendTextForTenant($pdo, $tenantId, (string) $member['phone'], $message)) {
                     $sent++;
                 }
             }
@@ -259,11 +269,15 @@ final class Notify
             $message = "*Booking baru masuk* lewat form booking " . Tenant::displayName($tenant) . ":\n\n"
                 . 'Nama: ' . (string) ($request['name'] ?? '—') . "\n"
                 . 'WhatsApp: ' . (string) ($request['whatsapp'] ?? '—') . "\n"
-                . 'Tanggal acara: ' . (!empty($request['event_date']) ? License::formatDateId((string) $request['event_date']) : '—') . "\n"
-                . 'Paket: ' . (string) ($request['package_name'] ?? '—') . "\n\n"
+                . 'Nama Acara: ' . (string) ($request['event_name'] ?? '—') . "\n"
+                . 'Tanggal: ' . (!empty($request['event_date']) ? License::formatDateId((string) $request['event_date']) : '—') . "\n"
+                . 'Jam Mulai: ' . (string) ($request['start_time'] ?? '—') . "\n"
+                . 'Paket: ' . (string) ($request['package_name'] ?? '—') . "\n"
+                . 'DP: ' . (isset($request['dp_amount']) && $request['dp_amount'] !== null ? Package::formatPrice($request['dp_amount']) : '—') . "\n"
+                . 'Lokasi: ' . (string) ($request['address'] ?? '—') . "\n\n"
                 . 'Klien & event drafnya sudah dibuat otomatis di dashboard (Buku Klien & Event). Silakan tindak lanjuti.';
 
-            return Mpwa::sendText($pdo, $number, $message);
+            return Mpwa::sendTextForTenant($pdo, $tenantId, $number, $message);
         } catch (Throwable) {
             return false;
         }
@@ -311,9 +325,11 @@ final class Notify
         try {
             $stmt = $pdo->prepare(
                 'INSERT INTO booking_requests
-                    (tenant_id, client_id, event_id, name, whatsapp, address, event_date, package_name, notes)
+                    (tenant_id, client_id, event_id, name, whatsapp, address, event_date, package_name, notes,
+                     event_name, start_time, dp_amount)
                  VALUES
-                    (:tenant_id, :client_id, :event_id, :name, :whatsapp, :address, :event_date, :package_name, :notes)'
+                    (:tenant_id, :client_id, :event_id, :name, :whatsapp, :address, :event_date, :package_name, :notes,
+                     :event_name, :start_time, :dp_amount)'
             );
             $stmt->execute([
                 'tenant_id' => $tenantId,
@@ -325,6 +341,9 @@ final class Notify
                 'event_date' => $data['event_date'] ?? null,
                 'package_name' => $data['package_name'] ?? null,
                 'notes' => $data['notes'] ?? null,
+                'event_name' => $data['event_name'] ?? null,
+                'start_time' => $data['start_time'] ?? null,
+                'dp_amount' => $data['dp_amount'] ?? null,
             ]);
         } catch (PDOException) {
             // Log bersifat tambahan; abaikan kegagalan.

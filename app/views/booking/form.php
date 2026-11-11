@@ -70,39 +70,24 @@ $err = static function (string $field) use ($errors): string {
                 </div>
 
                 <div class="field">
-                    <label for="bk-name">Nama Kamu / Nama Pasangan / Nama Instansi</label>
+                    <label for="bk-name">Nama</label>
                     <input type="text" id="bk-name" name="name" maxlength="120" required
-                           placeholder="cth. Diva &amp; Anasita"
+                           placeholder="cth. I Gede Diva Widnyana"
                            value="<?= e((string) ($values['name'] ?? '')) ?>">
                     <?= $err('name') ?>
                 </div>
 
                 <div class="field">
-                    <label for="bk-wa">Nomor WhatsApp Aktif</label>
+                    <label for="bk-wa">No WA</label>
                     <input type="text" id="bk-wa" name="whatsapp" maxlength="32" required inputmode="tel"
-                           placeholder="08xxxxxxxxxx"
+                           placeholder="cth. 081933072740"
                            value="<?= e((string) ($values['whatsapp'] ?? '')) ?>">
                     <?= $err('whatsapp') ?>
                 </div>
 
-                <div class="field">
-                    <label for="bk-address">Alamat / Domisili</label>
-                    <input type="text" id="bk-address" name="address" maxlength="255"
-                           placeholder="cth. Tianyar Barat, Karangasem"
-                           value="<?= e((string) ($values['address'] ?? '')) ?>">
-                    <?= $err('address') ?>
-                </div>
-
-                <div class="field">
-                    <label for="bk-date">Tanggal Acara</label>
-                    <input type="date" id="bk-date" name="event_date"
-                           value="<?= e((string) ($values['event_date'] ?? '')) ?>">
-                    <?= $err('event_date') ?>
-                </div>
-
                 <?php if (($packages ?? []) !== []): ?>
                     <div class="field">
-                        <label for="bk-package">Paket yang Diminati</label>
+                        <label for="bk-package">Paket</label>
                         <select id="bk-package" name="package_id">
                             <option value="">— Belum menentukan —</option>
                             <?php foreach ($packages as $package): ?>
@@ -115,9 +100,42 @@ $err = static function (string $field) use ($errors): string {
                 <?php endif; ?>
 
                 <div class="field">
-                    <label for="bk-notes">Catatan Tambahan <span class="hint">(opsional)</span></label>
-                    <textarea id="bk-notes" name="notes" rows="3" maxlength="1000"
-                              placeholder="cth. Acara di gedung, mulai jam 10 pagi, tema rustic"><?= e((string) ($values['notes'] ?? '')) ?></textarea>
+                    <label for="bk-event-name">Nama Acara</label>
+                    <input type="text" id="bk-event-name" name="event_name" maxlength="160"
+                           placeholder="cth. Wedding Diva &amp; Anasita"
+                           value="<?= e((string) ($values['event_name'] ?? '')) ?>">
+                    <?= $err('event_name') ?>
+                </div>
+
+                <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                    <div class="field" style="flex: 1 1 160px;">
+                        <label for="bk-date">Tanggal</label>
+                        <input type="date" id="bk-date" name="event_date"
+                               value="<?= e((string) ($values['event_date'] ?? '')) ?>">
+                        <?= $err('event_date') ?>
+                    </div>
+                    <div class="field" style="flex: 1 1 120px;">
+                        <label for="bk-time">Jam Mulai</label>
+                        <input type="time" id="bk-time" name="start_time"
+                               value="<?= e((string) ($values['start_time'] ?? '')) ?>">
+                        <?= $err('start_time') ?>
+                    </div>
+                </div>
+
+                <div class="field">
+                    <label for="bk-dp">DP <span class="hint">(bila sudah ada — boleh kosong)</span></label>
+                    <input type="text" id="bk-dp" name="dp" inputmode="numeric"
+                           placeholder="cth. 1.000.000"
+                           value="<?= e((string) ($values['dp'] ?? '')) ?>">
+                    <?= $err('dp') ?>
+                </div>
+
+                <div class="field">
+                    <label for="bk-address">Share Lokasi</label>
+                    <textarea id="bk-address" name="address" rows="3" maxlength="255"
+                              placeholder="cth. Br. Dinas Taman Sari, Kec. Tianyar Barat — https://maps.app.goo.gl/xxxx"><?= e((string) ($values['address'] ?? '')) ?></textarea>
+                    <div class="hint">Tulis alamat lokasi acara; boleh juga tempel tautan Google Maps hasil berbagi lokasi.</div>
+                    <?= $err('address') ?>
                 </div>
 
                 <div class="form-actions">
