@@ -2984,7 +2984,7 @@ $router->get('/tenant/events/create', static function (): void {
 
     $driveAccounts = [];
     $formClients = [];
-    $packageNames = [];
+    $packageOptions = [];
     $values = Event::formValues();
     $pdo = Database::pdo();
     $tenantId = $user['tenant_id'];
@@ -2998,10 +2998,10 @@ $router->get('/tenant/events/create', static function (): void {
     if ($pdo !== null && $tenantId !== null) {
         try {
             $formClients = ClientBook::forTenant($pdo, (int) $tenantId);
-            $packageNames = PackageTemplate::names($pdo, (int) $tenantId);
+            $packageOptions = PackageTemplate::options($pdo, (int) $tenantId);
         } catch (PDOException) {
             $formClients = [];
-            $packageNames = [];
+            $packageOptions = [];
         }
         // Alur dari Buku Klien (v0.31.0): ?client_id= memilih
         // klien dan mengawali nama event dari nama klien.
@@ -3032,7 +3032,7 @@ $router->get('/tenant/events/create', static function (): void {
         'errors' => [],
         'driveAccounts' => $driveAccounts,
         'clients' => $formClients,
-        'packageNames' => $packageNames,
+        'packageOptions' => $packageOptions,
     ]);
 });
 
@@ -3052,15 +3052,15 @@ $router->post('/tenant/events', static function (): void {
     if ($errors !== []) {
         $driveAccounts = [];
         $formClients = [];
-        $packageNames = [];
+        $packageOptions = [];
         try {
             $driveAccounts = Event::connectedAccounts($pdo);
             $formClients = ClientBook::forTenant($pdo, $tenantId);
-            $packageNames = PackageTemplate::names($pdo, $tenantId);
+            $packageOptions = PackageTemplate::options($pdo, (int) $tenantId);
         } catch (PDOException) {
             $driveAccounts = [];
             $formClients = [];
-            $packageNames = [];
+            $packageOptions = [];
         }
         $flashes = Flash::pull();
         $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
@@ -3074,7 +3074,7 @@ $router->post('/tenant/events', static function (): void {
             'errors' => $errors,
             'driveAccounts' => $driveAccounts,
             'clients' => $formClients,
-            'packageNames' => $packageNames,
+            'packageOptions' => $packageOptions,
         ], 422);
         return;
     }
@@ -3156,13 +3156,13 @@ $router->get('/tenant/events/{id}/edit', static function (array $params): void {
     }
 
     $formClients = [];
-    $packageNames = [];
+    $packageOptions = [];
     try {
         $formClients = ClientBook::forTenant($pdo, (int) $tenantId);
-        $packageNames = PackageTemplate::names($pdo, (int) $tenantId);
+        $packageOptions = PackageTemplate::options($pdo, (int) $tenantId);
     } catch (PDOException) {
         $formClients = [];
-        $packageNames = [];
+        $packageOptions = [];
     }
 
     View::render('tenant/events/form', [
@@ -3175,7 +3175,7 @@ $router->get('/tenant/events/{id}/edit', static function (array $params): void {
         'errors' => [],
         'driveAccounts' => $driveAccounts,
         'clients' => $formClients,
-        'packageNames' => $packageNames,
+        'packageOptions' => $packageOptions,
     ]);
 });
 
@@ -3204,15 +3204,15 @@ $router->post('/tenant/events/{id}', static function (array $params): void {
     if ($errors !== []) {
         $driveAccounts = [];
         $formClients = [];
-        $packageNames = [];
+        $packageOptions = [];
         try {
             $driveAccounts = Event::connectedAccounts($pdo);
             $formClients = ClientBook::forTenant($pdo, (int) $tenantId);
-            $packageNames = PackageTemplate::names($pdo, (int) $tenantId);
+            $packageOptions = PackageTemplate::options($pdo, (int) $tenantId);
         } catch (PDOException) {
             $driveAccounts = [];
             $formClients = [];
-            $packageNames = [];
+            $packageOptions = [];
         }
         $flashes = Flash::pull();
         $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
@@ -3226,7 +3226,7 @@ $router->post('/tenant/events/{id}', static function (array $params): void {
             'errors' => $errors,
             'driveAccounts' => $driveAccounts,
             'clients' => $formClients,
-            'packageNames' => $packageNames,
+            'packageOptions' => $packageOptions,
         ], 422);
         return;
     }

@@ -367,10 +367,22 @@ final class Event
             }
             $data['client_dp_paid'] = $dp;
         }
-        if (!isset($errors['client_total_price']) && !isset($errors['client_dp_paid'])
-            && $data['client_total_price'] !== null && $data['client_dp_paid'] !== null
-            && (float) $data['client_dp_paid'] > (float) $data['client_total_price']) {
-            $errors['client_dp_paid'] = 'DP tidak boleh melebihi nilai paket.';
+
+        $discountRaw = trim((string) ($input['client_discount'] ?? ''));
+        if ($discountRaw === '') {
+            $data['client_discount'] = null;
+        } else {
+            [$discount, $discountError] = PackageTemplate::parseMoney($discountRaw);
+            if ($discountError !== null) {
+                $errors['client_discount'] = 'Diskon: ' . $discountError;
+            }
+            $data['client_discount'] = $discount;
+        }
+
+        if (!isset($errors['client_total_price']) && !isset($errors['client_dp_paid']) && !isset($errors['client_discount'])
+            && $data['client_total_price'] !== null
+            && (float) ($data['client_discount'] ?? 0) + (float) ($data['client_dp_paid'] ?? 0) > (float) $data['client_total_price']) {
+            $errors['client_dp_paid'] = 'Diskon + DP tidak boleh melebihi nilai paket.';
         }
 
         return [$data, $errors];
@@ -388,13 +400,13 @@ final class Event
                  starts_at, ends_at, payment_lock_enabled,
                  limit_mode, session_quota_limit, status,
                  client_id, client_package_name,
-                 client_total_price, client_dp_paid)
+                 client_total_price, client_discount, client_dp_paid)
              VALUES
                 (:tenant_id, :drive_account_id, :name, :slug, :venue,
                  :starts_at, :ends_at, :payment_lock_enabled,
                  :limit_mode, :session_quota_limit, :status,
                  :client_id, :client_package_name,
-                 :client_total_price, :client_dp_paid)'
+                 :client_total_price, :client_discount, :client_dp_paid)'
         );
         $stmt->execute([
             'tenant_id' => $tenantId,
@@ -411,6 +423,7 @@ final class Event
             'client_id' => $data['client_id'] ?? null,
             'client_package_name' => $data['client_package_name'] ?? null,
             'client_total_price' => $data['client_total_price'] ?? null,
+            'client_discount' => $data['client_discount'] ?? null,
             'client_dp_paid' => $data['client_dp_paid'] ?? null,
         ]);
 
@@ -435,6 +448,7 @@ final class Event
                     client_id = :client_id,
                     client_package_name = :client_package_name,
                     client_total_price = :client_total_price,
+                    client_discount = :client_discount,
                     client_dp_paid = :client_dp_paid
               WHERE id = :id'
         );
@@ -452,19 +466,22 @@ final class Event
             'client_id' => $data['client_id'] ?? null,
             'client_package_name' => $data['client_package_name'] ?? null,
             'client_total_price' => $data['client_total_price'] ?? null,
+            'client_discount' => $data['client_discount'] ?? null,
             'client_dp_paid' => $data['client_dp_paid'] ?? null,
             'id' => $id,
         ]);
     }
 
-    /** Sisa pembayaran klien pada event (null bila nilai paket tidak diisi). */
+    /** Sisa pembayaran klien: nilai paket − diskon − DP (null bila nilai paket tidak diisi). */
     public static function clientRemaining(array $event): ?float
     {
         if (($event['client_total_price'] ?? null) === null) {
             return null;
         }
 
-        return max(0.0, (float) $event['client_total_price'] - (float) ($event['client_dp_paid'] ?? 0));
+        return max(0.0, (float) $event['client_total_price']
+            - (float) ($event['client_discount'] ?? 0)
+            - (float) ($event['client_dp_paid'] ?? 0));
     }
 
     /* -----------------------------------------------------------------
@@ -547,11 +564,12 @@ final class Event
             'client_id' => '',
             'client_package_name' => '',
             'client_total_price' => '',
+            'client_discount' => '',
             'client_dp_paid' => '',
         ];
 
         if ($post !== null) {
-            foreach (['name', 'slug', 'venue', 'status', 'limit_mode', 'client_package_name', 'client_total_price', 'client_dp_paid'] as $field) {
+            foreach (['name', 'slug', 'venue', 'status', 'limit_mode', 'client_package_name', 'client_total_price', 'client_discount', 'client_dp_paid'] as $field) {
                 if (isset($post[$field]) && is_string($post[$field])) {
                     $values[$field] = $post[$field];
                 }
@@ -594,7 +612,7 @@ final class Event
                 ? (string) (int) $event['client_id']
                 : '';
             $values['client_package_name'] = (string) ($event['client_package_name'] ?? '');
-            foreach (['client_total_price', 'client_dp_paid'] as $moneyField) {
+            foreach (['client_total_price', 'client_discount', 'client_dp_paid'] as $moneyField) {
                 $money = (string) ($event[$moneyField] ?? '');
                 if ($money !== '' && str_contains($money, '.')) {
                     $money = rtrim(rtrim($money, '0'), '.');

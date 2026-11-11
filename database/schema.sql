@@ -235,6 +235,7 @@ CREATE TABLE events (
     client_id            BIGINT UNSIGNED NULL COMMENT 'Klien dari Buku Klien (v0.31.0)',
     client_package_name  VARCHAR(120) NULL COMMENT 'Paket layanan yang diambil klien (dari Daftar Paket)',
     client_total_price   DECIMAL(12,2) NULL COMMENT 'Nilai paket klien',
+    client_discount      DECIMAL(12,2) NULL COMMENT 'Diskon nominal (Rp) untuk klien (v0.32.0)',
     client_dp_paid       DECIMAL(12,2) NULL COMMENT 'DP yang sudah dibayar klien',
     created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

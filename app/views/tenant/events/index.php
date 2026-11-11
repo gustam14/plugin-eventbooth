@@ -75,6 +75,9 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
                                 <span class="status-on">Klien lunas</span>
                             <?php endif; ?>
                         </span>
+                        <?php if (!empty($event['client_discount']) && (float) $event['client_discount'] > 0): ?>
+                            <br><span style="color: var(--muted); font-size: 13px;">termasuk diskon <?= e(Package::formatPrice($event['client_discount'])) ?></span>
+                        <?php endif; ?>
                     <?php endif; ?>
                 </td>
                 <td><?= e(License::formatDateId(isset($event['starts_at']) ? (string) $event['starts_at'] : null)) ?></td>

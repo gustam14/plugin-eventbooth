@@ -11,7 +11,7 @@
  * @var array<string, string> $errors Peta error per kolom.
  * @var array<int, array<string, mixed>> $driveAccounts Akun Drive platform berstatus connected.
  * @var array<int, array<string, mixed>> $clients Klien tenant dari Buku Klien (v0.31.0).
- * @var array<int, string> $packageNames Nama paket aktif dari Daftar Paket (v0.31.0).
+ * @var array<int, array{id: int, name: string, price: float}> $packageOptions Paket aktif dari Daftar Paket (v0.32.0).
  */
 
 $title = $heading;
@@ -125,18 +125,22 @@ $selectedDrive = (string) ($values['drive_account_id'] ?? 'auto');
                     <?= $err('client_id') ?>
                 </div>
                 <div class="field">
-                    <label for="client_package_name">Paket yang Diambil</label>
-                    <input type="text" id="client_package_name" name="client_package_name" maxlength="120"
-                           placeholder="cth. Limited 400 Foto" list="client-package-options"
+                    <label for="package_pick">Paket yang Diambil</label>
+                    <select id="package_pick">
+                        <option value="">— Pilih dari Daftar Paket —</option>
+                        <?php foreach (($packageOptions ?? []) as $packageOption): ?>
+                            <option value="<?= (int) $packageOption['id'] ?>"
+                                    data-name="<?= e((string) $packageOption['name']) ?>"
+                                    data-price="<?= (int) round((float) $packageOption['price']) ?>">
+                                <?= e((string) $packageOption['name']) ?> — <?= e(Package::formatPrice($packageOption['price'])) ?>
+                            </option>
+                        <?php endforeach; ?>
+                        <option value="manual">Paket lain (isi manual di bawah)</option>
+                    </select>
+                    <input type="text" id="client_package_name" name="client_package_name" maxlength="120" style="margin-top: 8px;"
+                           placeholder="Nama paket (terisi otomatis dari pilihan di atas)"
                            value="<?= e((string) ($values['client_package_name'] ?? '')) ?>">
-                    <?php if (($packageNames ?? []) !== []): ?>
-                        <datalist id="client-package-options">
-                            <?php foreach ($packageNames as $packageName): ?>
-                                <option value="<?= e((string) $packageName) ?>"></option>
-                            <?php endforeach; ?>
-                        </datalist>
-                        <div class="hint">Pilih dari Daftar Paket atau ketik manual.</div>
-                    <?php endif; ?>
+                    <div class="hint">Memilih paket mengisi nama &amp; nilai paket otomatis mengikuti Daftar Paket; keduanya tetap bisa diubah, mis. harga hasil nego.</div>
                     <?= $err('client_package_name') ?>
                 </div>
             </div>
@@ -145,18 +149,51 @@ $selectedDrive = (string) ($values['drive_account_id'] ?? 'auto');
                     <label for="client_total_price">Nilai Paket (Rp)</label>
                     <input type="text" id="client_total_price" name="client_total_price" inputmode="numeric"
                            value="<?= e((string) ($values['client_total_price'] ?? '')) ?>">
-                    <div class="hint">Harga kesepakatan dengan klien. Contoh: 3000000 atau 3.000.000.</div>
+                    <div class="hint">Terisi otomatis mengikuti paket yang dipilih. Contoh: 3000000 atau 3.000.000.</div>
                     <?= $err('client_total_price') ?>
+                </div>
+                <div class="field">
+                    <label for="client_discount">Diskon (Rp)</label>
+                    <input type="text" id="client_discount" name="client_discount" inputmode="numeric"
+                           value="<?= e((string) ($values['client_discount'] ?? '')) ?>">
+                    <div class="hint">Potongan harga kesepakatan (promo dsb.), diisi nominal seperti DP.</div>
+                    <?= $err('client_discount') ?>
                 </div>
                 <div class="field">
                     <label for="client_dp_paid">DP Sudah Dibayar (Rp)</label>
                     <input type="text" id="client_dp_paid" name="client_dp_paid" inputmode="numeric"
                            value="<?= e((string) ($values['client_dp_paid'] ?? '')) ?>">
-                    <div class="hint">Sisa pembayaran tampil otomatis di daftar Event.</div>
+                    <div class="hint">Sisa = nilai paket − diskon − DP, tampil otomatis di daftar Event.</div>
                     <?= $err('client_dp_paid') ?>
                 </div>
             </div>
         </fieldset>
+        <script>
+        (function () {
+            var pick = document.getElementById('package_pick');
+            var nameInput = document.getElementById('client_package_name');
+            var priceInput = document.getElementById('client_total_price');
+            if (!pick || !nameInput || !priceInput) { return; }
+            // Bila nama paket tersimpan cocok dengan salah satu
+            // paket di Daftar Paket, tandai pilihan itu sejak awal.
+            if (nameInput.value !== '') {
+                for (var i = 0; i < pick.options.length; i++) {
+                    if (pick.options[i].getAttribute('data-name') === nameInput.value) {
+                        pick.selectedIndex = i;
+                        break;
+                    }
+                }
+            }
+            pick.addEventListener('change', function () {
+                var option = pick.options[pick.selectedIndex];
+                if (!option) { return; }
+                var name = option.getAttribute('data-name');
+                var price = option.getAttribute('data-price');
+                if (name) { nameInput.value = name; }
+                if (price) { priceInput.value = price; }
+            });
+        })();
+        </script>
 
         <fieldset>
             <legend>Pembayaran Tamu</legend>

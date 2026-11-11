@@ -72,6 +72,33 @@ final class PackageTemplate
         return $names;
     }
 
+    /**
+     * Pilihan paket aktif untuk formulir event (v0.32.0):
+     * id + nama + harga, agar harga event terisi otomatis
+     * mengikuti paket yang dipilih.
+     *
+     * @return array<int, array{id: int, name: string, price: float}>
+     */
+    public static function options(PDO $pdo, int $tenantId): array
+    {
+        $stmt = $pdo->prepare(
+            'SELECT id, name, price FROM package_templates
+              WHERE tenant_id = :tenant_id AND is_active = 1
+              ORDER BY sort_order ASC, id ASC'
+        );
+        $stmt->execute(['tenant_id' => $tenantId]);
+        $options = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $options[] = [
+                'id' => (int) $row['id'],
+                'name' => (string) $row['name'],
+                'price' => (float) ($row['price'] ?? 0),
+            ];
+        }
+
+        return $options;
+    }
+
     /* -----------------------------------------------------------------
      * Validasi & simpan
      * --------------------------------------------------------------- */
