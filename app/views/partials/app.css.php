@@ -332,6 +332,39 @@ table.list tr:last-child td { border-bottom: none; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .row-actions form { display: inline; }
 
+/* Sel utama daftar (nama event dsb.) tidak boleh terhimpit. */
+table.list td.cell-main { min-width: 240px; }
+.ev-name { font-size: 15px; font-weight: 700; line-height: 1.35; }
+.ev-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.ev-due { margin-top: 5px; font-size: 13.5px; }
+
+/* Mode kartu (v0.36.6): di layar kecil tabel daftar berubah
+   menjadi satu kartu per baris — label kolom tampil kecil di
+   kiri, nilai di kanan; tidak ada lagi teks bertumpuk sempit
+   atau geser menyamping. */
+@media (max-width: 900px) {
+    table.list-cards { min-width: 0; }
+    table.list-cards thead { display: none; }
+    table.list-cards tbody tr {
+        display: block; padding: 12px 14px 14px;
+    }
+    table.list-cards td {
+        display: flex; justify-content: space-between; align-items: baseline;
+        gap: 16px; border-bottom: none; padding: 5px 0; text-align: right;
+    }
+    table.list-cards td::before {
+        content: attr(data-label); flex: none; text-align: left;
+        color: var(--muted); font-size: 11.5px; font-weight: 700;
+        letter-spacing: .06em; text-transform: uppercase; padding-top: 2px;
+    }
+    table.list-cards td.cell-main,
+    table.list-cards td.cell-actions { display: block; text-align: left; }
+    table.list-cards td.cell-main { padding-bottom: 9px; }
+    table.list-cards td.cell-actions { padding-top: 11px; }
+    table.list-cards td.cell-main::before,
+    table.list-cards td.cell-actions::before { content: none; }
+}
+
 /* ---------- Kunci lisensi teks penuh ---------- */
 .key-full {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

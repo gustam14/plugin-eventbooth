@@ -188,14 +188,14 @@ $s = $settings ?? Notify::defaults();
                 <div class="field" style="margin-top: 10px;">
                     <label>Webhook terakhir diterima</label>
                     <div class="table-wrap">
-                        <table>
+                        <table class="list list-cards">
                             <thead><tr><th>Waktu</th><th>Pengirim</th><th>Hasil</th></tr></thead>
                             <tbody>
                             <?php foreach ($webhookLogs as $log): ?>
                                 <tr>
-                                    <td><?= e((string) ($log['received_at'] ?? '')) ?></td>
-                                    <td><?= e((string) ($log['sender'] ?? '—')) ?></td>
-                                    <td><?= e((string) ($log['result'] ?? '')) ?></td>
+                                    <td data-label="Waktu"><?= e((string) ($log['received_at'] ?? '')) ?></td>
+                                    <td data-label="Pengirim"><?= e((string) ($log['sender'] ?? '—')) ?></td>
+                                    <td data-label="Hasil"><?= e((string) ($log['result'] ?? '')) ?></td>
                                 </tr>
                             <?php endforeach; ?>
                             </tbody>

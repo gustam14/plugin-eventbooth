@@ -27,7 +27,7 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
     </div>
 <?php else: ?>
     <div class="table-wrap">
-    <table class="list">
+    <table class="list list-cards">
         <thead>
         <tr>
             <th>Event</th>
@@ -57,40 +57,40 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
             }
             ?>
             <tr>
-                <td>
-                    <strong><?= e((string) $event['name']) ?></strong><br>
-                    <span style="color: var(--muted); font-size: 13px;">/e/<?= e((string) $event['slug']) ?></span>
+                <td class="cell-main">
+                    <div class="ev-name"><?= e((string) $event['name']) ?></div>
+                    <div class="ev-sub">/e/<?= e((string) $event['slug']) ?></div>
                     <?php if (!empty($event['client_name'])): ?>
-                        <br><span style="color: var(--muted); font-size: 13px;">Klien: <?= e((string) $event['client_name']) ?></span>
+                        <div class="ev-sub">Klien: <?= e((string) $event['client_name']) ?></div>
                     <?php endif; ?>
                     <?php if (!empty($event['client_package_name'])): ?>
-                        <br><span style="color: var(--muted); font-size: 13px;">Paket: <?= e((string) $event['client_package_name']) ?></span>
+                        <div class="ev-sub">Paket: <?= e((string) $event['client_package_name']) ?></div>
                     <?php endif; ?>
                     <?php $clientRemaining = Event::clientRemaining($event); ?>
                     <?php if ($clientRemaining !== null): ?>
-                        <br><span style="font-size: 13px;">
+                        <div class="ev-due">
                             <?php if ($clientRemaining > 0): ?>
                                 Sisa klien: <strong><?= e(Package::formatPrice($clientRemaining)) ?></strong>
                             <?php else: ?>
                                 <span class="status-on">Klien lunas</span>
                             <?php endif; ?>
-                        </span>
+                        </div>
                         <?php if (!empty($event['client_discount']) && (float) $event['client_discount'] > 0): ?>
-                            <br><span style="color: var(--muted); font-size: 13px;">termasuk diskon <?= e(Package::formatPrice($event['client_discount'])) ?></span>
+                            <div class="ev-sub">termasuk diskon <?= e(Package::formatPrice($event['client_discount'])) ?></div>
                         <?php endif; ?>
                     <?php endif; ?>
                 </td>
-                <td><?= e(License::formatDateId(isset($event['starts_at']) ? (string) $event['starts_at'] : null)) ?></td>
-                <td><span class="<?= e(Event::statusBadgeClass($status)) ?>"><?= e(Event::statusLabel($status)) ?></span></td>
-                <td>
+                <td data-label="Tanggal"><?= e(License::formatDateId(isset($event['starts_at']) ? (string) $event['starts_at'] : null)) ?></td>
+                <td data-label="Status"><span class="<?= e(Event::statusBadgeClass($status)) ?>"><?= e(Event::statusLabel($status)) ?></span></td>
+                <td data-label="Pembayaran Tamu">
                     <?php if ($lockOn): ?>
                         <span class="status-warn">Terkunci (bayar dulu)</span>
                     <?php else: ?>
                         <span class="status-on">Bebas (tanpa bayar)</span>
                     <?php endif; ?>
                 </td>
-                <td><?= number_format((int) ($event['session_count'] ?? 0), 0, ',', '.') ?></td>
-                <td>
+                <td data-label="Sesi"><?= number_format((int) ($event['session_count'] ?? 0), 0, ',', '.') ?></td>
+                <td data-label="Retensi Album">
                     <?php if ($retDays <= 0): ?>
                         <span style="color: var(--muted);">Tidak dibatasi</span>
                     <?php elseif ($purgeTs === null): ?>
@@ -100,10 +100,10 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
                         <span style="color: var(--muted); font-size: 13px;"><?= $leftDays < 0 ? 'sudah jatuh tempo' : 'sisa ' . $leftDays . ' hari' ?><?= $retOverride !== null ? ' · retensi khusus' : '' ?></span>
                     <?php endif; ?>
                 </td>
-                <td>
+                <td data-label="Album">
                     <a href="<?= e(($appUrl ?? '') . '/e/' . (string) $event['slug']) ?>" target="_blank" rel="noopener">Lihat Album</a>
                 </td>
-                <td>
+                <td class="cell-actions">
                     <div class="row-actions">
                         <a class="btn btn-small" href="/tenant/events/<?= (int) $event['id'] ?>/album">Kelola Album</a>
                         <?php if ((int) ($event['media_count'] ?? 0) > 0): ?>
