@@ -627,27 +627,56 @@ final class Notify
      */
     public static function parseBookingText(string $text): array
     {
-        $patterns = [
-            'nama' => '/^\s*nama\s*:\s*(.+?)\s*$/mi',
-            'no_wa' => '/^\s*(?:no\.?\s*)?(?:wa|whatsapp|hp|telepon|telp)\s*:\s*(.+?)\s*$/mi',
-            'paket' => '/^\s*paket\s*:\s*(.+?)\s*$/mi',
-            'nama_acara' => '/^\s*nama\s*acara\s*:\s*(.+?)\s*$/mi',
-            'tanggal' => '/^\s*tanggal(?:\s*acara)?\s*:\s*(.+?)\s*$/mi',
-            'jam' => '/^\s*jam(?:\s*mulai)?\s*:\s*(.+?)\s*$/mi',
-            'dp' => '/^\s*dp\s*:\s*(.+?)\s*$/mi',
-            'lokasi' => '/^\s*(?:share\s+)?lokasi\s*:\s*(.+)$/ims',
-        ];
         $fields = ['nama' => '', 'no_wa' => '', 'paket' => '', 'nama_acara' => '',
             'tanggal' => '', 'jam' => '', 'dp' => '', 'lokasi' => ''];
-        $found = 0;
-        foreach ($patterns as $key => $pattern) {
-            if (preg_match($pattern, $text, $m) === 1) {
-                $fields[$key] = trim($m[1]);
-                $found++;
+        // Payload webhook MPWA yang nyata (terverifikasi dari
+        // panel Diagnosis, 11 Nov 16:25) MENGHILANGKAN semua
+        // baris baru: format delapan baris tiba sebagai satu
+        // baris rapat ("BookingNama : ...No WA : ...Paket :
+        // ..."). Parser lama yang menjangkar label di awal
+        // baris membaca 0/8. Parser ini mencari POSISI label di
+        // mana saja dalam teks lalu memotong nilai di antara
+        // dua label berurutan — bekerja untuk format berbaris
+        // maupun yang dirapatkan.
+        $pattern = '/(nama\s+acara|nama|no\.?\s*(?:wa|whatsapp|hp|telepon|telp)'
+            . '|paket|tanggal(?:\s+acara)?|jam(?:\s+mulai)?|dp'
+            . '|share\s+lokasi|lokasi|alamat)\s*:\s*/i';
+        if (preg_match_all($pattern, $text, $m, PREG_OFFSET_CAPTURE) === false
+            || count($m[0]) === 0) {
+            return ['labels' => 0] + $fields;
+        }
+        $count = count($m[0]);
+        $seen = [];
+        for ($i = 0; $i < $count; $i++) {
+            $key = self::bookingLabelKey((string) $m[1][$i][0]);
+            if ($key === null) {
+                continue;
             }
+            $valueStart = $m[0][$i][1] + strlen($m[0][$i][0]);
+            $valueEnd = $i + 1 < $count ? $m[0][$i + 1][1] : strlen($text);
+            $fields[$key] = trim(substr($text, $valueStart, max(0, $valueEnd - $valueStart)));
+            $seen[$key] = true;
         }
 
-        return ['labels' => $found] + $fields;
+        return ['labels' => count($seen)] + $fields;
+    }
+
+    /** Petakan label mentah ke kunci bidang booking. */
+    private static function bookingLabelKey(string $label): ?string
+    {
+        $n = (string) preg_replace('/[^a-z]+/', '', strtolower($label));
+
+        return match (true) {
+            $n === 'nama' => 'nama',
+            $n === 'namaacara' => 'nama_acara',
+            str_starts_with($n, 'no') || in_array($n, ['wa', 'whatsapp', 'hp', 'telepon', 'telp'], true) => 'no_wa',
+            $n === 'paket' => 'paket',
+            str_starts_with($n, 'tanggal') => 'tanggal',
+            str_starts_with($n, 'jam') => 'jam',
+            $n === 'dp' => 'dp',
+            str_contains($n, 'lokasi') || $n === 'alamat' => 'lokasi',
+            default => null,
+        };
     }
 
     /** Tanggal Indonesia/angka menjadi Y-m-d; null bila tak sah. */
