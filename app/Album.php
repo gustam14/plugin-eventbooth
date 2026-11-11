@@ -359,13 +359,20 @@ final class Album
             'guest_whatsapp' => $guestWhatsapp,
         ]);
 
+        // ID ditangkap SEKARANG (v0.27.1): PDO::lastInsertId()
+        // membaca paket OK pernyataan terakhir — UPDATE di
+        // clearEmptied() sesudahnya mengosongkannya menjadi 0,
+        // sehingga baris yang baru dibuat tidak ditemukan lagi
+        // dan pembuatan sesi dilaporkan gagal sejak v0.22.0.
+        $newId = (int) $pdo->lastInsertId();
+
         // Event yang albumnya sempat ditandai kosong-retensi
         // (v0.22.0) hidup lagi begitu ada sesi baru: penanda
         // Expired dicabut (helper toleran pra-migrasi).
         Retention::clearEmptied($pdo, $eventId);
 
         $stmt = $pdo->prepare('SELECT * FROM sessions WHERE id = :id LIMIT 1');
-        $stmt->execute(['id' => (int) $pdo->lastInsertId()]);
+        $stmt->execute(['id' => $newId]);
         $row = $stmt->fetch();
 
         return $row === false ? [] : $row;
