@@ -571,7 +571,10 @@ final class Notify
             }
         }
 
+        // Format MPWA: field 'participant' hanya terisi pada
+        // pesan grup — perlakukan sebagai penanda grup juga.
         $isGroup = !empty($data['isGroup']) || !empty($data['is_group'])
+            || !empty($data['participant'])
             || (isset($data['from']) && is_string($data['from']) && str_contains($data['from'], '@g.us'))
             || (isset($data['chatId']) && is_string($data['chatId']) && str_contains($data['chatId'], '@g.us'));
         $fromMe = !empty($data['fromMe']) || !empty($data['from_me'])
@@ -730,12 +733,26 @@ final class Notify
      * ignored | disabled | guidance | guidance_limited |
      * duplicate | created | error.
      */
-    public static function processWaBooking(PDO $pdo, int $tenantId, string $senderRaw, string $text): string
+    public static function processWaBooking(PDO $pdo, int $tenantId, string $senderRaw, string $text, ?string $deviceRaw = null): string
     {
         try {
             $settings = self::settings($pdo, $tenantId);
             if (empty($settings['wa_booking_enabled'])) {
                 return 'disabled';
+            }
+            // Bila payload menyebut perangkat pengirim (field
+            // 'device' MPWA) dan tenant sudah mendaftarkan nomor
+            // pengirimnya, keduanya harus sama — perlindungan
+            // bila URL webhook terpasang di perangkat yang salah.
+            if ($deviceRaw !== null && trim($deviceRaw) !== '') {
+                $expectedSender = Mpwa::tenantSender($pdo, $tenantId);
+                if ($expectedSender !== null && $expectedSender !== '') {
+                    $deviceNorm = Whatsapp::normalize($deviceRaw);
+                    $expectedNorm = Whatsapp::normalize($expectedSender);
+                    if ($deviceNorm !== null && $expectedNorm !== null && $deviceNorm !== $expectedNorm) {
+                        return 'device_mismatch';
+                    }
+                }
             }
             $tenant = Tenant::find($pdo, $tenantId);
             if ($tenant === null) {

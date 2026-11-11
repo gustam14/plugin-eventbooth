@@ -3932,7 +3932,13 @@ $router->post('/api/wa/webhook/{token}', static function (array $params): void {
     if ($message['fromMe'] || $message['isGroup']) {
         $result = 'ignored_self_or_group';
     } elseif ($message['sender'] !== null && $message['text'] !== null) {
-        $result = Notify::processWaBooking($pdo, $tenantId, $message['sender'], $message['text']);
+        $result = Notify::processWaBooking(
+            $pdo,
+            $tenantId,
+            $message['sender'],
+            $message['text'],
+            isset($data['device']) && is_scalar($data['device']) ? (string) $data['device'] : null
+        );
     }
     Notify::logWebhook(
         $pdo,
