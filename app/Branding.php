@@ -19,6 +19,7 @@ final class Branding
 {
     public const DEFAULT_COLOR = '#C9A24B';
     private const MAX_LOGO_BYTES = 2097152; // 2 MB
+    private const MAX_BANNER_BYTES = 5242880; // 5 MB
 
     /** Palet warna siap pakai untuk pemilih di dashboard tenant. */
     public const PRESETS = [
@@ -44,6 +45,19 @@ final class Branding
         return $file === '' ? null : '/brand-logo/' . rawurlencode($file);
     }
 
+    /** Folder banner galeri (di luar docroot, seperti logo). */
+    public static function bannerDir(): string
+    {
+        return BASE_PATH . '/storage/banners';
+    }
+
+    public static function bannerUrl(?string $file): ?string
+    {
+        $file = trim((string) $file);
+
+        return $file === '' ? null : '/gallery-banner/' . rawurlencode($file);
+    }
+
     /**
      * Keadaan branding kosong (tampilan platform bawaan).
      *
@@ -62,6 +76,8 @@ final class Branding
             'instagram' => '',
             'instagram_url' => null,
             'whatsapp_url' => null,
+            'banner_file' => null,
+            'banner_url' => null,
             'has_custom' => false,
             'vendor_name' => '',
         ];
@@ -102,6 +118,21 @@ final class Branding
             }
         } catch (PDOException) {
             // Kolom branding belum dimigrasi — tampilan bawaan.
+        }
+
+        // Banner bawaan tenant (v0.25.0) dibaca terpisah agar
+        // kolomnya yang belum dimigrasi tidak menggagalkan
+        // pembacaan branding lain.
+        try {
+            $stmt = $pdo->prepare('SELECT brand_banner FROM tenants WHERE id = :id');
+            $stmt->execute(['id' => $tenantId]);
+            $bannerFile = $stmt->fetchColumn();
+            if ($bannerFile !== false && trim((string) $bannerFile) !== '') {
+                $brand['banner_file'] = (string) $bannerFile;
+                $brand['banner_url'] = self::bannerUrl((string) $bannerFile);
+            }
+        } catch (PDOException) {
+            // Kolom banner belum dimigrasi.
         }
 
         try {
@@ -260,31 +291,8 @@ final class Branding
         // yatim bila migrasi belum dijalankan (PDOException naik).
         $old = self::rawLogoFile($pdo, $tenantId);
 
-        if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-            throw new BrandingException('Unggah logo gagal. Silakan coba lagi dengan berkas lain.');
-        }
-        $size = (int) ($file['size'] ?? 0);
-        if ($size <= 0 || $size > self::MAX_LOGO_BYTES) {
-            throw new BrandingException('Ukuran logo maksimal 2 MB.');
-        }
-        $tmp = (string) ($file['tmp_name'] ?? '');
-        $info = $tmp !== '' ? @getimagesize($tmp) : false;
-        if ($info === false) {
-            throw new BrandingException('Berkas logo harus berupa gambar (PNG, JPG, atau WebP).');
-        }
-        $ext = [IMAGETYPE_PNG => 'png', IMAGETYPE_JPEG => 'jpg', IMAGETYPE_WEBP => 'webp'][$info[2]] ?? null;
-        if ($ext === null) {
-            throw new BrandingException('Format logo harus PNG, JPG, atau WebP.');
-        }
-
         $dir = self::storageDir();
-        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
-            throw new BrandingException('Folder penyimpanan logo belum dapat dibuat di server.');
-        }
-        $name = $tenantId . '-' . bin2hex(random_bytes(6)) . '.' . $ext;
-        if (!move_uploaded_file($tmp, $dir . '/' . $name)) {
-            throw new BrandingException('Logo gagal disimpan di server. Silakan coba lagi.');
-        }
+        $name = self::moveImageUpload($file, $dir, $tenantId . '-', self::MAX_LOGO_BYTES, 'logo');
 
         try {
             $stmt = $pdo->prepare('UPDATE tenants SET brand_logo = :file WHERE id = :id');
@@ -309,6 +317,134 @@ final class Branding
         if ($old !== null) {
             @unlink(self::storageDir() . '/' . basename($old));
         }
+    }
+
+    /* -----------------------------------------------------------------
+     * Banner galeri (v0.25.0, permintaan pemilik 11 Nov 2026):
+     * gambar lebar di kepala album publik. Banner per event
+     * (events.banner_image, diatur dari Kelola Album) menimpa
+     * banner bawaan tenant (tenants.brand_banner, diatur dari
+     * Branding Galeri). Berkas di storage/banners, disajikan
+     * lewat rute /gallery-banner/{berkas}.
+     * --------------------------------------------------------------- */
+
+    /** Simpan banner khusus sebuah event. Mengembalikan nama berkas. */
+    public static function storeEventBanner(PDO $pdo, int $eventId, array $file): string
+    {
+        $old = self::rawEventBanner($pdo, $eventId);
+        $dir = self::bannerDir();
+        $name = self::moveImageUpload($file, $dir, 'e' . $eventId . '-', self::MAX_BANNER_BYTES, 'banner');
+        try {
+            $stmt = $pdo->prepare('UPDATE events SET banner_image = :file WHERE id = :id');
+            $stmt->execute(['file' => $name, 'id' => $eventId]);
+        } catch (PDOException $e) {
+            @unlink($dir . '/' . $name);
+            throw $e;
+        }
+        if ($old !== null && $old !== $name) {
+            @unlink($dir . '/' . basename($old));
+        }
+
+        return $name;
+    }
+
+    /** Hapus banner khusus event (galeri kembali ke banner bawaan tenant). */
+    public static function removeEventBanner(PDO $pdo, int $eventId): void
+    {
+        $old = self::rawEventBanner($pdo, $eventId);
+        $stmt = $pdo->prepare('UPDATE events SET banner_image = NULL WHERE id = :id');
+        $stmt->execute(['id' => $eventId]);
+        if ($old !== null) {
+            @unlink(self::bannerDir() . '/' . basename($old));
+        }
+    }
+
+    /** Simpan banner bawaan tenant. Mengembalikan nama berkas. */
+    public static function storeTenantBanner(PDO $pdo, int $tenantId, array $file): string
+    {
+        $old = self::rawTenantBanner($pdo, $tenantId);
+        $dir = self::bannerDir();
+        $name = self::moveImageUpload($file, $dir, 't' . $tenantId . '-', self::MAX_BANNER_BYTES, 'banner');
+        try {
+            $stmt = $pdo->prepare('UPDATE tenants SET brand_banner = :file WHERE id = :id');
+            $stmt->execute(['file' => $name, 'id' => $tenantId]);
+        } catch (PDOException $e) {
+            @unlink($dir . '/' . $name);
+            throw $e;
+        }
+        if ($old !== null && $old !== $name) {
+            @unlink($dir . '/' . basename($old));
+        }
+
+        return $name;
+    }
+
+    /** Hapus banner bawaan tenant. */
+    public static function removeTenantBanner(PDO $pdo, int $tenantId): void
+    {
+        $old = self::rawTenantBanner($pdo, $tenantId);
+        $stmt = $pdo->prepare('UPDATE tenants SET brand_banner = NULL WHERE id = :id');
+        $stmt->execute(['id' => $tenantId]);
+        if ($old !== null) {
+            @unlink(self::bannerDir() . '/' . basename($old));
+        }
+    }
+
+    /** Nama berkas banner event (PDOException naik bila kolom belum ada). */
+    private static function rawEventBanner(PDO $pdo, int $eventId): ?string
+    {
+        $stmt = $pdo->prepare('SELECT banner_image FROM events WHERE id = :id');
+        $stmt->execute(['id' => $eventId]);
+        $v = $stmt->fetchColumn();
+
+        return $v === false || $v === null || trim((string) $v) === '' ? null : (string) $v;
+    }
+
+    /** Nama berkas banner bawaan tenant (PDOException naik bila kolom belum ada). */
+    private static function rawTenantBanner(PDO $pdo, int $tenantId): ?string
+    {
+        $stmt = $pdo->prepare('SELECT brand_banner FROM tenants WHERE id = :id');
+        $stmt->execute(['id' => $tenantId]);
+        $v = $stmt->fetchColumn();
+
+        return $v === false || $v === null || trim((string) $v) === '' ? null : (string) $v;
+    }
+
+    /**
+     * Validasi + pindahkan satu unggahan gambar (PNG/JPG/WebP)
+     * ke folder tujuan dengan nama {prefix}{acak}.{ext}.
+     *
+     * @param array<string, mixed> $file Satu entri $_FILES.
+     */
+    private static function moveImageUpload(array $file, string $dir, string $prefix, int $maxBytes, string $label): string
+    {
+        if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            throw new BrandingException('Unggah ' . $label . ' gagal. Silakan coba lagi dengan berkas lain.');
+        }
+        $size = (int) ($file['size'] ?? 0);
+        if ($size <= 0 || $size > $maxBytes) {
+            throw new BrandingException(
+                'Ukuran ' . $label . ' maksimal ' . (string) (int) ($maxBytes / 1048576) . ' MB.'
+            );
+        }
+        $tmp = (string) ($file['tmp_name'] ?? '');
+        $info = $tmp !== '' ? @getimagesize($tmp) : false;
+        if ($info === false) {
+            throw new BrandingException('Berkas ' . $label . ' harus berupa gambar (PNG, JPG, atau WebP).');
+        }
+        $ext = [IMAGETYPE_PNG => 'png', IMAGETYPE_JPEG => 'jpg', IMAGETYPE_WEBP => 'webp'][$info[2]] ?? null;
+        if ($ext === null) {
+            throw new BrandingException('Format ' . $label . ' harus PNG, JPG, atau WebP.');
+        }
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new BrandingException('Folder penyimpanan ' . $label . ' belum dapat dibuat di server.');
+        }
+        $name = $prefix . bin2hex(random_bytes(6)) . '.' . $ext;
+        if (!move_uploaded_file($tmp, $dir . '/' . $name)) {
+            throw new BrandingException(ucfirst($label) . ' gagal disimpan di server. Silakan coba lagi.');
+        }
+
+        return $name;
     }
 
     /** Nama berkas logo tersimpan (PDOException naik bila kolom belum ada). */

@@ -21,6 +21,7 @@ require BASE_PATH . '/app/views/partials/dashboard_top.php';
 
 $vendor = Tenant::displayName($tenant);
 $logoUrl = (string) ($brand['logo_url'] ?? '');
+$bannerUrl = (string) ($brand['banner_url'] ?? '');
 $colorVal = (string) ($brand['raw_color'] ?? '');
 $taglineVal = (string) ($brand['raw_tagline'] ?? '');
 $instagramVal = (string) ($brand['raw_instagram'] ?? '');
@@ -34,6 +35,14 @@ $waUrl = (string) ($brand['whatsapp_url'] ?? '');
     }
     .brand-logo-preview img { max-height: 56px; max-width: 240px; object-fit: contain; display: block; }
     .brand-logo-preview .none { color: #9AA3AF; font-size: 13px; }
+    .brand-banner-preview {
+        display: flex; align-items: center; justify-content: center;
+        min-height: 84px; padding: 10px;
+        background: #0A0C0F; border: 1px solid var(--line, #262B33); border-radius: 12px;
+        margin-bottom: 16px; overflow: hidden;
+    }
+    .brand-banner-preview img { width: 100%; max-height: 170px; object-fit: cover; border-radius: 8px; display: block; }
+    .brand-banner-preview .none { color: #9AA3AF; font-size: 13px; }
     .swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     .swatches button {
         width: 34px; height: 34px; border-radius: 10px; cursor: pointer;
@@ -77,12 +86,40 @@ $waUrl = (string) ($brand['whatsapp_url'] ?? '');
         <?php endif; ?>
     </div>
 
+    <h2 style="font-size: 16.5px; font-weight: 700; margin-bottom: 6px;">Banner Bawaan Galeri</h2>
+    <p class="hint" style="margin-bottom: 14px;">
+        Gambar lebar di kepala album publik — membuat galeri terlihat jauh lebih profesional.
+        Banner bawaan ini dipakai oleh semua event yang belum punya banner sendiri;
+        banner khusus per event diatur dari Kelola Album event tersebut.
+    </p>
+    <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 16px;">
+        <span class="brand-banner-preview" style="flex: 1 1 320px; margin-bottom: 0;">
+            <?php if ($bannerUrl !== ''): ?>
+                <img src="<?= e($bannerUrl) ?>" alt="Banner bawaan <?= e($vendor) ?>">
+            <?php else: ?>
+                <span class="none">Belum ada banner bawaan — galeri tampil tanpa banner sampai ada yang dipasang.</span>
+            <?php endif; ?>
+        </span>
+        <?php if ($bannerUrl !== ''): ?>
+            <form method="post" action="/tenant/branding/banner-remove"
+                  onsubmit="return confirm('Hapus banner bawaan? Event tanpa banner khusus akan tampil tanpa banner.');">
+                <?= Auth::csrfField() ?>
+                <button class="btn" type="submit">Hapus Banner</button>
+            </form>
+        <?php endif; ?>
+    </div>
+
     <form method="post" action="/tenant/branding" enctype="multipart/form-data">
         <?= Auth::csrfField() ?>
         <div class="field">
             <label for="logo">Unggah logo baru</label>
             <input type="file" id="logo" name="logo" accept="image/png,image/jpeg,image/webp">
             <p class="hint">Kosongkan bila tidak ingin mengganti logo yang sekarang.</p>
+        </div>
+        <div class="field">
+            <label for="banner">Unggah banner bawaan baru</label>
+            <input type="file" id="banner" name="banner" accept="image/png,image/jpeg,image/webp">
+            <p class="hint">Disarankan gambar lebar 1600×900 atau lebih besar, maks 5 MB. Kosongkan bila tidak ingin mengganti banner yang sekarang.</p>
         </div>
 
         <h2 style="font-size: 16.5px; font-weight: 700; margin: 22px 0 6px;">Warna, Tagline &amp; Sosial Media</h2>

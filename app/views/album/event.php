@@ -22,6 +22,8 @@ $brandCustom = !empty($brand['has_custom']);
 $brandLogo = (string) ($brand['logo_url'] ?? '');
 $brandTagline = (string) ($brand['tagline'] ?? '');
 $brandInk = (string) ($brand['ink'] ?? '#1A1405');
+$bannerUrl = Branding::bannerUrl(isset($event['banner_image']) ? (string) $event['banner_image'] : null)
+    ?? (string) ($brand['banner_url'] ?? '');
 $eventDate = License::formatDateId(isset($event['starts_at']) ? (string) $event['starts_at'] : null);
 $venue = trim((string) ($event['venue'] ?? ''));
 $slug = (string) ($event['slug'] ?? '');
@@ -122,6 +124,23 @@ $slug = (string) ($event['slug'] ?? '');
     .album-head .meta { color: var(--muted); font-size: 15.5px; }
     .album-head .meta strong { color: var(--text); font-weight: 600; }
 
+    /* ---------- Kepala album dengan banner (v0.25.0) ---------- */
+    .album-head.has-banner {
+        position: relative; overflow: hidden;
+        padding: 138px 0 40px; background: none;
+    }
+    .album-head.has-banner .hero-img {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        object-fit: cover; display: block;
+    }
+    .album-head.has-banner .hero-shade {
+        position: absolute; inset: 0;
+        background: linear-gradient(180deg, rgba(10, 12, 15, .28) 0%, rgba(10, 12, 15, .52) 55%, rgba(10, 12, 15, .93) 100%);
+    }
+    .album-head.has-banner .wrap { position: relative; z-index: 1; }
+    .album-head.has-banner h1 { text-shadow: 0 2px 20px rgba(0, 0, 0, .5); }
+    .album-head.has-banner .meta { color: #C7CDD6; }
+
     /* ---------- Kisi sesi ---------- */
     .grid {
         display: grid; gap: 18px; margin-top: 30px;
@@ -189,6 +208,7 @@ $slug = (string) ($event['slug'] ?? '');
 
     @media (max-width: 768px) {
         .album-head { padding: 42px 0 6px; }
+        .album-head.has-banner { padding: 96px 0 30px; }
         footer.site-foot .wrap { justify-content: center; text-align: center; }
     }
     @media (max-width: 520px) {
@@ -236,7 +256,11 @@ $slug = (string) ($event['slug'] ?? '');
 </header>
 
 <main>
-    <section class="album-head">
+    <section class="album-head<?= $bannerUrl !== '' ? ' has-banner' : '' ?>">
+        <?php if ($bannerUrl !== ''): ?>
+            <img class="hero-img" src="<?= e($bannerUrl) ?>" alt="">
+            <span class="hero-shade" aria-hidden="true"></span>
+        <?php endif; ?>
         <div class="wrap">
             <div class="kicker">Album Event<?php if (!$brandCustom && $vendorName !== ''): ?> · <?= e($vendorName) ?><?php endif; ?></div>
             <h1><?= e($eventName) ?></h1>

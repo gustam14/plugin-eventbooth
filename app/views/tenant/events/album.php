@@ -104,6 +104,41 @@ foreach (($sessionsData ?? []) as $rowData) {
     </form>
 </div>
 
+<?php $eventBannerUrl = $eventBannerUrl ?? null; $tenantBannerUrl = $tenantBannerUrl ?? null; ?>
+<div class="panel-box">
+    <h3 style="margin-top: 0;">Banner Galeri</h3>
+    <p class="hint" style="margin-bottom: 12px;">
+        Gambar lebar di kepala album publik event ini — membuat galeri terlihat jauh lebih
+        profesional. Disarankan 1600×900 atau lebih lebar (JPG/PNG/WebP, maks 5 MB);
+        tepi gambar dapat terpotong mengikuti layar tamu. Bila event ini tanpa banner
+        khusus, galeri memakai <strong>banner bawaan</strong> dari menu Branding Galeri (bila ada).
+    </p>
+    <?php if (!empty($eventBannerUrl)): ?>
+        <img src="<?= e((string) $eventBannerUrl) ?>" alt="Banner galeri event ini"
+             style="width: 100%; max-height: 180px; object-fit: cover; border-radius: 12px; display: block; margin-bottom: 14px;">
+    <?php elseif (!empty($tenantBannerUrl)): ?>
+        <img src="<?= e((string) $tenantBannerUrl) ?>" alt="Banner bawaan tenant"
+             style="width: 100%; max-height: 180px; object-fit: cover; border-radius: 12px; display: block; margin-bottom: 10px; opacity: .8;">
+        <p class="hint" style="margin-bottom: 12px;">Saat ini galeri memakai banner bawaan tenant di atas. Unggah banner khusus untuk menggantinya pada event ini saja.</p>
+    <?php else: ?>
+        <p class="hint" style="margin-bottom: 12px;">Belum ada banner — kepala album tampil polos dengan judul event.</p>
+    <?php endif; ?>
+    <form method="post" action="/tenant/events/<?= $eventId ?>/album/banner" enctype="multipart/form-data"
+          style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
+        <?= Auth::csrfField() ?>
+        <input type="file" name="banner" accept="image/png,image/jpeg,image/webp" required>
+        <button class="btn btn-primary" type="submit">Pasang Banner</button>
+    </form>
+    <?php if (!empty($eventBannerUrl)): ?>
+        <form method="post" action="/tenant/events/<?= $eventId ?>/album/banner-remove"
+              onsubmit="return confirm('Hapus banner khusus event ini? Galeri kembali memakai banner bawaan tenant (bila ada).');"
+              style="margin-top: 10px;">
+            <?= Auth::csrfField() ?>
+            <button class="btn" type="submit">Hapus Banner Event Ini</button>
+        </form>
+    <?php endif; ?>
+</div>
+
 <div class="panel-box">
     <h3 style="margin-top: 0;">Unggah Berkas ke Galeri</h3>
     <p class="hint" style="margin-bottom: 12px;">

@@ -263,6 +263,32 @@ $router->get('/brand-logo/{file}', static function (array $params): void {
     readfile($path);
 });
 
+// Banner galeri — berkas di storage/banners dengan nama
+// berpola ketat {e|t}{id}-{acak}.{ext} (v0.25.0).
+$router->get('/gallery-banner/{file}', static function (array $params): void {
+    $file = basename((string) ($params['file'] ?? ''));
+    $path = null;
+    $mime = null;
+    if (preg_match('/^[et]\d+-[a-f0-9]{12}\.(png|jpg|webp)$/', $file, $m) === 1) {
+        $candidate = Branding::bannerDir() . '/' . $file;
+        if (is_file($candidate)) {
+            $path = $candidate;
+            $mime = ['png' => 'image/png', 'jpg' => 'image/jpeg', 'webp' => 'image/webp'][$m[1]];
+        }
+    }
+    if ($path === null || $mime === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . (string) filesize($path));
+    header('Cache-Control: public, max-age=31536000, immutable');
+    readfile($path);
+});
+
 /* ---------------------------------------------------------------------
  * Media publik lewat domain sendiri — /media/{id} dan
  * /media/{id}/download. Galeri tampil sebagai website mandiri
@@ -2284,6 +2310,7 @@ $router->get('/tenant/branding', static function (): void {
             $brand['raw_color'] = (string) ($tenant['brand_color'] ?? '');
             $brand['raw_tagline'] = (string) ($tenant['brand_tagline'] ?? '');
             $brand['raw_instagram'] = (string) ($tenant['brand_instagram'] ?? '');
+            $brand['raw_banner'] = (string) ($tenant['brand_banner'] ?? '');
             try {
                 $stmt = $pdo->prepare(
                     'SELECT slug FROM events WHERE tenant_id = :tenant ORDER BY id DESC LIMIT 1'
@@ -2336,11 +2363,35 @@ $router->post('/tenant/branding', static function (): void {
         if (isset($_FILES['logo']) && (int) ($_FILES['logo']['size'] ?? 0) > 0) {
             Branding::storeLogo($pdo, (int) $tenantId, $_FILES['logo']);
         }
+        if (isset($_FILES['banner']) && (int) ($_FILES['banner']['size'] ?? 0) > 0) {
+            Branding::storeTenantBanner($pdo, (int) $tenantId, $_FILES['banner']);
+        }
         Flash::success('Branding galeri tersimpan — galeri publikmu sekarang memakai merekmu sendiri.');
     } catch (BrandingException $e) {
         Flash::error($e->getMessage());
     } catch (PDOException) {
-        Flash::error('Pengaturan branding belum bisa disimpan — jalankan migrasi database/migrations/2026-11-11-tenant-branding.sql di phpMyAdmin dulu.');
+        Flash::error('Pengaturan branding belum bisa disimpan — jalankan migrasi database/migrations/2026-11-11-tenant-branding.sql dan database/migrations/2026-11-11-gallery-banner.sql di phpMyAdmin dulu.');
+    }
+
+    redirect('/tenant/branding');
+});
+
+$router->post('/tenant/branding/banner-remove', static function (): void {
+    $user = Auth::requireRole('tenant_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Layanan belum siap. Silakan coba lagi.');
+        redirect('/tenant/branding');
+    }
+
+    try {
+        Branding::removeTenantBanner($pdo, (int) $tenantId);
+        Flash::success('Banner bawaan dihapus — galeri tanpa banner khusus event tampil tanpa banner.');
+    } catch (PDOException) {
+        Flash::error('Banner belum bisa dihapus — jalankan migrasi database/migrations/2026-11-11-gallery-banner.sql di phpMyAdmin dulu.');
     }
 
     redirect('/tenant/branding');
@@ -4844,6 +4895,8 @@ $router->get('/tenant/events/{id}/album', static function (array $params) use ($
         'retentionDays' => (int) $retention['days'],
         'retentionPlan' => (string) $retention['plan_name'],
         'retentionOverridden' => (bool) ($retention['overridden'] ?? false),
+        'eventBannerUrl' => Branding::bannerUrl(isset($event['banner_image']) ? (string) $event['banner_image'] : null),
+        'tenantBannerUrl' => Branding::forTenantId($pdo, $tenantId)['banner_url'],
     ]);
 });
 
@@ -5466,6 +5519,62 @@ $router->post('/tenant/events/{id}/album/event-settings', static function (array
         Flash::success('Pengaturan event diperbarui.');
     } catch (PDOException) {
         Flash::error('Pengaturan event gagal disimpan.');
+    }
+    redirect($albumPath);
+});
+
+// Banner galeri per event (v0.25.0): gambar lebar di kepala
+// album publik event ini, menimpa banner bawaan tenant.
+$router->post('/tenant/events/{id}/album/banner', static function (array $params) use ($tenantAlbumEvent): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    $albumPath = '/tenant/events/' . (int) $event['id'] . '/album';
+
+    if (!isset($_FILES['banner']) || (int) ($_FILES['banner']['size'] ?? 0) <= 0) {
+        Flash::error('Pilih berkas banner terlebih dahulu.');
+        redirect($albumPath);
+    }
+    try {
+        Branding::storeEventBanner($pdo, (int) $event['id'], $_FILES['banner']);
+        Flash::success('Banner galeri event terpasang — album publikmu sekarang tampil dengan banner ini.');
+    } catch (BrandingException $e) {
+        Flash::error($e->getMessage());
+    } catch (PDOException) {
+        Flash::error('Banner belum bisa disimpan — jalankan migrasi database/migrations/2026-11-11-gallery-banner.sql di phpMyAdmin dulu.');
+    }
+    redirect($albumPath);
+});
+
+$router->post('/tenant/events/{id}/album/banner-remove', static function (array $params) use ($tenantAlbumEvent): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    $albumPath = '/tenant/events/' . (int) $event['id'] . '/album';
+
+    try {
+        Branding::removeEventBanner($pdo, (int) $event['id']);
+        Flash::success('Banner event dihapus — galeri memakai banner bawaan tenant (bila ada).');
+    } catch (PDOException) {
+        Flash::error('Banner belum bisa dihapus — jalankan migrasi database/migrations/2026-11-11-gallery-banner.sql di phpMyAdmin dulu.');
     }
     redirect($albumPath);
 });
