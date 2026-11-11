@@ -355,10 +355,26 @@ CREATE TABLE tenant_notifications (
     owner_notify_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'WA ke pemilik usaha saat form booking masuk',
     mpwa_api_key         TEXT NULL COMMENT 'API key MPWA milik tenant (terenkripsi, v0.34.0)',
     mpwa_sender          VARCHAR(32) NULL COMMENT 'Nomor perangkat MPWA milik tenant (v0.34.0)',
+    crew_reminder_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Pengingat kru H-1 & hari-H pukul 06.00 aktif (v0.35.0)',
+    crew_h1_template     TEXT NULL COMMENT 'Template pengingat kru H-1; NULL = bawaan (v0.35.0)',
+    crew_h0_template     TEXT NULL COMMENT 'Template pengingat kru hari-H; NULL = bawaan (v0.35.0)',
     created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (tenant_id),
     CONSTRAINT fk_tenant_notifications_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE crew_notifications_sent (
+    id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    event_id       BIGINT UNSIGNED NOT NULL,
+    crew_member_id BIGINT UNSIGNED NOT NULL,
+    kind           ENUM('h1','h0') NOT NULL,
+    sent_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_crew_notifications (event_id, crew_member_id, kind),
+    KEY idx_crew_notifications_event (event_id),
+    CONSTRAINT fk_crew_notifications_event FOREIGN KEY (event_id) REFERENCES events (id) ON DELETE CASCADE,
+    CONSTRAINT fk_crew_notifications_member FOREIGN KEY (crew_member_id) REFERENCES crew_members (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE booking_requests (

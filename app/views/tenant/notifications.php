@@ -35,9 +35,9 @@ $s = $settings ?? Notify::defaults();
 
 <?php if (!empty($tablesMissing)): ?>
     <div class="panel-box">
-        <p>Fitur ini belum aktif di database. Jalankan berkas migrasi
-            <strong>database/migrations/2026-11-11-notifications.sql</strong> dan
-            <strong>database/migrations/2026-11-11-tenant-mpwa.sql</strong>
+        <p>Fitur ini belum aktif di database. Jalankan berkas-berkas migrasi terbaru
+            (<strong>2026-11-11-notifications.sql</strong>, <strong>2026-11-11-tenant-mpwa.sql</strong>,
+            <strong>2026-11-11-crew-reminders.sql</strong>)
             sekali di phpMyAdmin pada database plugin, lalu muat ulang halaman ini.</p>
     </div>
 <?php else: ?>
@@ -121,9 +121,24 @@ $s = $settings ?? Notify::defaults();
             </label>
             <div class="hint">Dikirim saat kamu menyimpan panel Kru Bertugas di Kelola Album; kru yang sudah bertugas sebelumnya tidak dikirimi lagi.</div>
             <div class="field" style="margin-top: 10px;">
-                <label for="crew_template">Template pesan kru</label>
+                <label for="crew_template">Template pesan kru (tugas baru)</label>
                 <textarea id="crew_template" name="crew_template" rows="5" maxlength="2000" <?= $isAdmin ? '' : 'disabled' ?>><?= e((string) $s['crew_template']) ?></textarea>
-                <div class="hint">Placeholder: {nama_kru} · {nama_event} · {tanggal} · {venue} · {nama_vendor}.</div>
+                <div class="hint">Placeholder: {nama_kru} · {nama_event} · {tanggal} · {jam} · {venue} · {nama_vendor}.</div>
+            </div>
+            <label class="check" style="margin-top: 12px;">
+                <input type="checkbox" name="crew_reminder_enabled" value="1" <?= !empty($s['crew_reminder_enabled']) ? 'checked' : '' ?> <?= $isAdmin ? '' : 'disabled' ?>>
+                Aktifkan juga pengingat H-1 &amp; hari-H (dikirim otomatis pukul 06.00 pagi)
+            </label>
+            <div class="hint">Setiap kru bertugas menerima pengingat sehari sebelum acara dan pada pagi hari acara, dari nomor WhatsApp milikmu. Kru yang sama tidak pernah menerima pengingat yang sama dua kali.</div>
+            <div class="field" style="margin-top: 10px;">
+                <label for="crew_h1_template">Template pengingat H-1</label>
+                <textarea id="crew_h1_template" name="crew_h1_template" rows="5" maxlength="2000" <?= $isAdmin ? '' : 'disabled' ?>><?= e((string) ($s['crew_h1_template'] ?? '')) ?></textarea>
+                <div class="hint">Placeholder sama seperti template tugas baru.</div>
+            </div>
+            <div class="field" style="margin-top: 10px;">
+                <label for="crew_h0_template">Template pengingat hari-H</label>
+                <textarea id="crew_h0_template" name="crew_h0_template" rows="5" maxlength="2000" <?= $isAdmin ? '' : 'disabled' ?>><?= e((string) ($s['crew_h0_template'] ?? '')) ?></textarea>
+                <div class="hint">Placeholder sama seperti template tugas baru.</div>
             </div>
         </fieldset>
 

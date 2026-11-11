@@ -5101,6 +5101,23 @@ $router->get('/api/automation/drive-health', static function () use ($automation
     ]);
 });
 
+// Pengingat kru H-1 & hari-H (v0.35.0): dipanggil workflow
+// n8n "Plugin Eventbooth — Pengingat Kru" setiap hari pukul
+// 06.00 Asia/Makassar. Seluruh pengiriman memakai gateway
+// MPWA milik tenant masing-masing (Notify::sendCrewReminders)
+// dan terlindung penanda anti-dobel.
+$router->get('/api/automation/crew-reminders', static function () use ($automationGuard): void {
+    $pdo = $automationGuard();
+    $counts = Notify::sendCrewReminders($pdo);
+
+    Json::respond([
+        'status' => 'ok',
+        'h1_sent' => $counts['h1'],
+        'h0_sent' => $counts['h0'],
+        'skipped' => $counts['skipped'],
+    ]);
+});
+
 $router->post('/api/automation/purge-session', static function () use ($automationGuard, $readJsonBody, $googleCredentials): void {
     $pdo = $automationGuard();
     $body = $readJsonBody();

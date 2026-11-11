@@ -22,6 +22,8 @@ final class Notify
     public const DEFAULT_SHARE = "Halo! Foto sesi {kode_sesi} di event {nama_event} sudah dapat dilihat & diunduh di sini:\n{tautan}\n\nTerima kasih sudah berfoto bersama {nama_vendor}!";
     public const DEFAULT_CLIENT = "Halo {nama_klien}, terima kasih sudah booking di *{nama_vendor}*!\n\nBooking Anda sudah kami catat:\nEvent: {nama_event}\nTanggal: {tanggal}\nPaket: {nama_paket}\nSisa pembayaran: {sisa}\n\nKami akan menghubungimu lagi menjelang hari acara. Terima kasih!";
     public const DEFAULT_CREW = "Halo {nama_kru}, kamu ditugaskan sebagai kru pada event *{nama_event}*.\n\nTanggal: {tanggal}\nLokasi: {venue}\n\nMohon konfirmasi kesiapanmu ke {nama_vendor}. Terima kasih!";
+    public const DEFAULT_CREW_H1 = "Halo {nama_kru}, pengingat ramah: *besok* kamu bertugas pada event *{nama_event}*.\n\nTanggal: {tanggal}\nJam mulai: {jam}\nLokasi: {venue}\n\nSiapkan peralatan dari sekarang dan mohon datang lebih awal besok. Terima kasih! — {nama_vendor}";
+    public const DEFAULT_CREW_H0 = "Halo {nama_kru}, *hari ini* kamu bertugas pada event *{nama_event}*.\n\nJam mulai: {jam}\nLokasi: {venue}\n\nSemangat! Semoga acara berjalan lancar. — {nama_vendor}";
 
     /** Pengaturan bawaan bila tenant belum punya baris pengaturan. */
     public static function defaults(): array
@@ -33,6 +35,9 @@ final class Notify
             'client_template' => self::DEFAULT_CLIENT,
             'crew_enabled' => false,
             'crew_template' => self::DEFAULT_CREW,
+            'crew_reminder_enabled' => false,
+            'crew_h1_template' => self::DEFAULT_CREW_H1,
+            'crew_h0_template' => self::DEFAULT_CREW_H0,
             'booking_form_enabled' => false,
             'owner_notify_enabled' => true,
             'mpwa_sender' => '',
@@ -62,11 +67,12 @@ final class Notify
         $settings['share_enabled'] = (int) ($row['share_enabled'] ?? 1) === 1;
         $settings['client_enabled'] = (int) ($row['client_enabled'] ?? 0) === 1;
         $settings['crew_enabled'] = (int) ($row['crew_enabled'] ?? 0) === 1;
+        $settings['crew_reminder_enabled'] = (int) ($row['crew_reminder_enabled'] ?? 0) === 1;
         $settings['booking_form_enabled'] = (int) ($row['booking_form_enabled'] ?? 0) === 1;
         $settings['owner_notify_enabled'] = (int) ($row['owner_notify_enabled'] ?? 1) === 1;
         $settings['mpwa_sender'] = isset($row['mpwa_sender']) ? (string) $row['mpwa_sender'] : '';
         $settings['mpwa_api_key_set'] = Mpwa::tenantApiKey($pdo, $tenantId) !== null;
-        foreach (['share_template', 'client_template', 'crew_template'] as $field) {
+        foreach (['share_template', 'client_template', 'crew_template', 'crew_h1_template', 'crew_h0_template'] as $field) {
             $stored = isset($row[$field]) ? trim((string) $row[$field]) : '';
             if ($stored !== '') {
                 $settings[$field] = $stored;
@@ -89,6 +95,7 @@ final class Notify
             'share_enabled' => isset($input['share_enabled']),
             'client_enabled' => isset($input['client_enabled']),
             'crew_enabled' => isset($input['crew_enabled']),
+            'crew_reminder_enabled' => isset($input['crew_reminder_enabled']),
             'booking_form_enabled' => isset($input['booking_form_enabled']),
             'owner_notify_enabled' => isset($input['owner_notify_enabled']),
         ];
@@ -109,6 +116,8 @@ final class Notify
             'share_template' => self::DEFAULT_SHARE,
             'client_template' => self::DEFAULT_CLIENT,
             'crew_template' => self::DEFAULT_CREW,
+            'crew_h1_template' => self::DEFAULT_CREW_H1,
+            'crew_h0_template' => self::DEFAULT_CREW_H0,
         ];
         foreach ($defaults as $field => $default) {
             $template = trim((string) ($input[$field] ?? ''));
@@ -131,10 +140,12 @@ final class Notify
         $stmt = $pdo->prepare(
             'INSERT INTO tenant_notifications
                 (tenant_id, share_enabled, share_template, client_enabled, client_template,
-                 crew_enabled, crew_template, booking_form_enabled, owner_notify_enabled, mpwa_sender)
+                 crew_enabled, crew_template, booking_form_enabled, owner_notify_enabled, mpwa_sender,
+                 crew_reminder_enabled, crew_h1_template, crew_h0_template)
              VALUES
                 (:tenant_id, :share_enabled, :share_template, :client_enabled, :client_template,
-                 :crew_enabled, :crew_template, :booking_form_enabled, :owner_notify_enabled, :mpwa_sender)
+                 :crew_enabled, :crew_template, :booking_form_enabled, :owner_notify_enabled, :mpwa_sender,
+                 :crew_reminder_enabled, :crew_h1_template, :crew_h0_template)
              ON DUPLICATE KEY UPDATE
                 share_enabled = VALUES(share_enabled),
                 share_template = VALUES(share_template),
@@ -144,7 +155,10 @@ final class Notify
                 crew_template = VALUES(crew_template),
                 booking_form_enabled = VALUES(booking_form_enabled),
                 owner_notify_enabled = VALUES(owner_notify_enabled),
-                mpwa_sender = VALUES(mpwa_sender)'
+                mpwa_sender = VALUES(mpwa_sender),
+                crew_reminder_enabled = VALUES(crew_reminder_enabled),
+                crew_h1_template = VALUES(crew_h1_template),
+                crew_h0_template = VALUES(crew_h0_template)'
         );
         $stmt->execute([
             'tenant_id' => $tenantId,
@@ -157,6 +171,9 @@ final class Notify
             'booking_form_enabled' => !empty($data['booking_form_enabled']) ? 1 : 0,
             'owner_notify_enabled' => !empty($data['owner_notify_enabled']) ? 1 : 0,
             'mpwa_sender' => $data['mpwa_sender'] ?? null,
+            'crew_reminder_enabled' => !empty($data['crew_reminder_enabled']) ? 1 : 0,
+            'crew_h1_template' => $data['crew_h1_template'] ?? null,
+            'crew_h0_template' => $data['crew_h0_template'] ?? null,
         ]);
     }
 
@@ -232,13 +249,10 @@ final class Notify
                 if (empty($member['phone'])) {
                     continue;
                 }
-                $message = self::render((string) $settings['crew_template'], [
-                    'nama_kru' => (string) $member['name'],
-                    'nama_event' => (string) $event['name'],
-                    'tanggal' => !empty($event['starts_at']) ? License::formatDateId((string) $event['starts_at']) : '—',
-                    'venue' => (string) ($event['venue'] ?? '—'),
-                    'nama_vendor' => Tenant::displayName($tenant),
-                ]);
+                $message = self::render(
+                    (string) $settings['crew_template'],
+                    self::crewVars($event, $member, Tenant::displayName($tenant))
+                );
                 if (Mpwa::sendTextForTenant($pdo, $tenantId, (string) $member['phone'], $message)) {
                     $sent++;
                 }
@@ -248,6 +262,110 @@ final class Notify
         } catch (Throwable) {
             return 0;
         }
+    }
+
+    /** Placeholder bersama untuk pesan-pesan kru. */
+    private static function crewVars(array $event, array $member, string $vendorName): array
+    {
+        $startsAt = isset($event['starts_at']) && is_string($event['starts_at']) ? $event['starts_at'] : '';
+
+        return [
+            'nama_kru' => (string) ($member['name'] ?? ''),
+            'nama_event' => (string) ($event['name'] ?? ''),
+            'tanggal' => $startsAt !== '' ? License::formatDateId($startsAt) : '—',
+            'jam' => $startsAt !== '' && ($ts = strtotime($startsAt)) !== false ? date('H.i', $ts) : '—',
+            'venue' => (string) ($event['venue'] ?? '—'),
+            'nama_vendor' => $vendorName,
+        ];
+    }
+
+    /**
+     * Sapuan pengingat kru H-1 & hari-H (dipanggil endpoint
+     * otomasi pukul 06.00 oleh workflow n8n): untuk setiap
+     * event besok (h1) dan hari ini (h0) berstatus draf/aktif
+     * milik tenant yang mengaktifkan pengingat, kirim WA ke
+     * kru bertugas yang belum pernah menerima jenis itu
+     * (penanda crew_notifications_sent). Maksimal 100 pesan
+     * per sapuan.
+     *
+     * @return array{h1: int, h0: int, skipped: int}
+     */
+    public static function sendCrewReminders(PDO $pdo): array
+    {
+        $counts = ['h1' => 0, 'h0' => 0, 'skipped' => 0];
+        $sentTotal = 0;
+        try {
+            $targets = [
+                'h1' => date('Y-m-d', strtotime('+1 day')),
+                'h0' => date('Y-m-d'),
+            ];
+            $settingsCache = [];
+            $tenantCache = [];
+            foreach ($targets as $kind => $date) {
+                $stmt = $pdo->prepare(
+                    "SELECT * FROM events
+                      WHERE starts_at IS NOT NULL AND DATE(starts_at) = :d
+                        AND status IN ('draft', 'active')
+                      ORDER BY id ASC"
+                );
+                $stmt->execute(['d' => $date]);
+                foreach ($stmt->fetchAll() as $event) {
+                    if ($sentTotal >= 100) {
+                        break 2;
+                    }
+                    $tenantId = (int) $event['tenant_id'];
+                    $settingsCache[$tenantId] ??= self::settings($pdo, $tenantId);
+                    $settings = $settingsCache[$tenantId];
+                    if (empty($settings['crew_reminder_enabled'])) {
+                        continue;
+                    }
+                    if (!Mpwa::tenantGatewayReady($pdo, $tenantId)) {
+                        $counts['skipped']++;
+                        continue;
+                    }
+                    $tenantCache[$tenantId] ??= Tenant::find($pdo, $tenantId);
+                    $tenant = $tenantCache[$tenantId];
+                    if ($tenant === null) {
+                        continue;
+                    }
+                    $template = $kind === 'h1'
+                        ? (string) $settings['crew_h1_template']
+                        : (string) $settings['crew_h0_template'];
+                    foreach (Crew::forEvent($pdo, (int) $event['id']) as $member) {
+                        if ($sentTotal >= 100) {
+                            break;
+                        }
+                        if (empty($member['phone'])) {
+                            continue;
+                        }
+                        $check = $pdo->prepare(
+                            'SELECT COUNT(*) FROM crew_notifications_sent
+                              WHERE event_id = :e AND crew_member_id = :m AND kind = :k'
+                        );
+                        $check->execute(['e' => (int) $event['id'], 'm' => (int) $member['id'], 'k' => $kind]);
+                        if ((int) $check->fetchColumn() > 0) {
+                            continue;
+                        }
+                        $message = self::render($template, self::crewVars($event, $member, Tenant::displayName($tenant)));
+                        if (!Mpwa::sendTextForTenant($pdo, $tenantId, (string) $member['phone'], $message)) {
+                            $counts['skipped']++;
+                            continue;
+                        }
+                        $mark = $pdo->prepare(
+                            'INSERT IGNORE INTO crew_notifications_sent (event_id, crew_member_id, kind)
+                             VALUES (:e, :m, :k)'
+                        );
+                        $mark->execute(['e' => (int) $event['id'], 'm' => (int) $member['id'], 'k' => $kind]);
+                        $counts[$kind]++;
+                        $sentTotal++;
+                    }
+                }
+            }
+        } catch (Throwable) {
+            // Best-effort: kembalikan hitungan yang sudah tercapai.
+        }
+
+        return $counts;
     }
 
     /** WA ke pemilik usaha saat form booking publik diisi calon klien. */
