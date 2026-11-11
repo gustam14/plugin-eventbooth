@@ -170,6 +170,25 @@ code {
     content: ""; position: absolute; left: -16px; top: 9px; bottom: 9px;
     width: 3px; border-radius: 3px; background: var(--gold-grad);
 }
+/* Grup menu lipat pada sidebar tenant (v0.30.0). */
+.side-group { display: flex; flex-direction: column; gap: 3px; }
+.side-group-title {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 10px 12px; border-radius: 10px; cursor: pointer; list-style: none;
+    color: var(--muted); font-size: 14.5px; font-weight: 600;
+    transition: background 150ms ease, color 150ms ease;
+}
+.side-group-title::-webkit-details-marker { display: none; }
+.side-group-title::after {
+    content: ""; flex: none; width: 7px; height: 7px;
+    border-right: 2px solid var(--muted-2); border-bottom: 2px solid var(--muted-2);
+    transform: rotate(45deg); transition: transform 150ms ease;
+}
+.side-group:not([open]) .side-group-title::after { transform: rotate(-45deg); }
+.side-group-title:hover { color: var(--text); background: rgba(255, 255, 255, .045); }
+.side-group-title.active { color: var(--gold-2); }
+.side-link.side-sub { padding-left: 26px; font-size: 14px; }
+.side-link.side-sub.active::before { display: none; }
 .side-soon {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     padding: 10px 12px; border-radius: 10px;
@@ -397,7 +416,10 @@ body.auth {
     .side-nav::-webkit-scrollbar { display: none; }
     .side-heading { display: none; }
     .side-link, .side-soon { white-space: nowrap; }
+    .side-group { flex: none; }
+    .side-group-title { white-space: nowrap; }
     .side-link.active::before { left: 12px; right: 12px; top: auto; bottom: -1px; width: auto; height: 3px; }
+    .side-link.side-sub.active::before { display: none; }
     .sidebar-user {
         margin-top: 14px; padding-top: 14px;
         display: flex; align-items: center; justify-content: space-between; gap: 14px;

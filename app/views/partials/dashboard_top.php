@@ -8,7 +8,7 @@
  * @var string $title      Judul halaman.
  * @var array{id: int, tenant_id: ?int, name: string, email: string, role: string} $user
  * @var array<int, array{type: string, message: string}> $flashes
- * @var string $activeNav  Kunci menu aktif: admin | plans | tenants | drive | tenant | licenses | devices | events | packages | account.
+ * @var string $activeNav  Kunci menu aktif: admin | plans | tenants | drive | tenant | licenses | devices | events | packages | catalog | crew | clients | midtrans | branding | account.
  */
 
 $roleLabel = match ($user['role'] ?? '') {
@@ -31,18 +31,29 @@ if (($user['role'] ?? '') === 'super_admin') {
     ];
     $navSoon = ['Pengaturan Platform'];
 } else {
+    // Menu tenant dikelompokkan (v0.30.0, permintaan pemilik
+    // 11 Nov 2026 — menu terlalu banyak bila dijejer rata):
+    // Beranda berdiri sendiri; sisanya empat grup lipat.
     $navItems = [
-        ['key' => 'tenant', 'label' => 'Ringkasan', 'href' => '/tenant'],
-        ['key' => 'licenses', 'label' => 'Lisensi Saya', 'href' => '/tenant/licenses'],
-        ['key' => 'devices', 'label' => 'Perangkat', 'href' => '/tenant/devices'],
-        ['key' => 'events', 'label' => 'Event', 'href' => '/tenant/events'],
-        ['key' => 'packages', 'label' => 'Paket Sesi', 'href' => '/tenant/packages'],
-        ['key' => 'catalog', 'label' => 'Daftar Paket', 'href' => '/tenant/package-catalog'],
-        ['key' => 'crew', 'label' => 'Kru', 'href' => '/tenant/crew'],
-        ['key' => 'clients', 'label' => 'Buku Klien', 'href' => '/tenant/clients'],
-        ['key' => 'midtrans', 'label' => 'Midtrans Tamu', 'href' => '/tenant/midtrans'],
-        ['key' => 'branding', 'label' => 'Branding Galeri', 'href' => '/tenant/branding'],
-        ['key' => 'account', 'label' => 'Ganti Kata Sandi', 'href' => '/account/password'],
+        ['key' => 'tenant', 'label' => 'Beranda', 'href' => '/tenant'],
+        ['label' => 'Event & Galeri', 'children' => [
+            ['key' => 'events', 'label' => 'Event', 'href' => '/tenant/events'],
+            ['key' => 'branding', 'label' => 'Branding Galeri', 'href' => '/tenant/branding'],
+        ]],
+        ['label' => 'Paket & Pembayaran', 'children' => [
+            ['key' => 'packages', 'label' => 'Paket Sesi', 'href' => '/tenant/packages'],
+            ['key' => 'midtrans', 'label' => 'Midtrans Tamu', 'href' => '/tenant/midtrans'],
+        ]],
+        ['label' => 'Operasional', 'children' => [
+            ['key' => 'catalog', 'label' => 'Daftar Paket', 'href' => '/tenant/package-catalog'],
+            ['key' => 'crew', 'label' => 'Kru', 'href' => '/tenant/crew'],
+            ['key' => 'clients', 'label' => 'Buku Klien', 'href' => '/tenant/clients'],
+        ]],
+        ['label' => 'Akun & Lisensi', 'children' => [
+            ['key' => 'licenses', 'label' => 'Lisensi Saya', 'href' => '/tenant/licenses'],
+            ['key' => 'devices', 'label' => 'Perangkat', 'href' => '/tenant/devices'],
+            ['key' => 'account', 'label' => 'Ganti Kata Sandi', 'href' => '/account/password'],
+        ]],
     ];
     $navSoon = ['Statistik'];
 }
@@ -74,7 +85,25 @@ if (($user['role'] ?? '') === 'super_admin') {
         <nav class="side-nav" aria-label="Menu dashboard">
             <span class="side-heading">Menu</span>
             <?php foreach ($navItems as $item): ?>
-                <a class="side-link<?= ($activeNav ?? '') === $item['key'] ? ' active' : '' ?>" href="<?= e($item['href']) ?>"><?= e($item['label']) ?></a>
+                <?php if (isset($item['children'])): ?>
+                    <?php
+                    $groupActive = false;
+                    foreach ($item['children'] as $childItem) {
+                        if (($activeNav ?? '') === $childItem['key']) {
+                            $groupActive = true;
+                            break;
+                        }
+                    }
+                    ?>
+                    <details class="side-group"<?= $groupActive ? ' open' : '' ?>>
+                        <summary class="side-group-title<?= $groupActive ? ' active' : '' ?>"><?= e($item['label']) ?></summary>
+                        <?php foreach ($item['children'] as $childItem): ?>
+                            <a class="side-link side-sub<?= ($activeNav ?? '') === $childItem['key'] ? ' active' : '' ?>" href="<?= e($childItem['href']) ?>"><?= e($childItem['label']) ?></a>
+                        <?php endforeach; ?>
+                    </details>
+                <?php else: ?>
+                    <a class="side-link<?= ($activeNav ?? '') === $item['key'] ? ' active' : '' ?>" href="<?= e($item['href']) ?>"><?= e($item['label']) ?></a>
+                <?php endif; ?>
             <?php endforeach; ?>
             <?php foreach ($navSoon as $label): ?>
                 <span class="side-soon"><?= e($label) ?><em>Segera hadir</em></span>

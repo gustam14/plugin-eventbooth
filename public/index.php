@@ -2349,6 +2349,37 @@ $router->get('/tenant', static function (): void {
         }
     }
 
+    // Data operasional Beranda (v0.30.0): booking terdekat
+    // dari Buku Klien + ringkasan kru/paket/sisa pembayaran.
+    // Query terpisah dan toleran tabel yang belum dimigrasi.
+    $upcomingBookings = [];
+    $opsStats = ['crew' => 0, 'packages' => 0, 'bookings_active' => 0, 'outstanding' => 0.0];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $clientStats = ClientBook::stats($pdo, (int) $tenantId);
+            $opsStats['bookings_active'] = $clientStats['active_count'];
+            $opsStats['outstanding'] = $clientStats['outstanding'];
+            $opsStats['crew'] = count(Crew::forTenant($pdo, (int) $tenantId, true));
+            $opsStats['packages'] = count(PackageTemplate::forTenant($pdo, (int) $tenantId));
+            $today = date('Y-m-d');
+            foreach (ClientBook::forTenant($pdo, (int) $tenantId) as $booking) {
+                if (!in_array((string) ($booking['status'] ?? ''), ['inquiry', 'booked'], true)) {
+                    continue;
+                }
+                if (empty($booking['event_date']) || (string) $booking['event_date'] < $today) {
+                    continue;
+                }
+                $upcomingBookings[] = $booking;
+                if (count($upcomingBookings) >= 5) {
+                    break;
+                }
+            }
+        } catch (PDOException) {
+            $upcomingBookings = [];
+            $opsStats = ['crew' => 0, 'packages' => 0, 'bookings_active' => 0, 'outstanding' => 0.0];
+        }
+    }
+
     View::render('tenant/overview', [
         'appName' => Config::appName(),
         'user' => $user,
@@ -2356,6 +2387,8 @@ $router->get('/tenant', static function (): void {
         'tenant' => $tenant,
         'counts' => $counts,
         'license' => $license,
+        'upcomingBookings' => $upcomingBookings,
+        'opsStats' => $opsStats,
     ]);
 });
 
