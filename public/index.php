@@ -3929,15 +3929,20 @@ $router->post('/api/wa/webhook/{token}', static function (array $params): void {
 
     $message = Notify::extractWaMessage($data);
     $result = 'ignored';
-    if ($message['fromMe'] || $message['isGroup']) {
-        $result = 'ignored_self_or_group';
-    } elseif ($message['sender'] !== null && $message['text'] !== null) {
+    if ($message['sender'] !== null && $message['text'] !== null) {
+        // Konteks pesan: 'self' = dari nomor tenant sendiri,
+        // 'group' = dari dalam grup, 'direct' = chat pribadi
+        // orang lain. Sejak v0.36.2 ketiganya boleh diproses;
+        // untuk self/group hanya booking yang lengkap & sah
+        // (diatur di Notify::processWaBooking).
+        $context = $message['fromMe'] ? 'self' : ($message['isGroup'] ? 'group' : 'direct');
         $result = Notify::processWaBooking(
             $pdo,
             $tenantId,
             $message['sender'],
             $message['text'],
-            isset($data['device']) && is_scalar($data['device']) ? (string) $data['device'] : null
+            isset($data['device']) && is_scalar($data['device']) ? (string) $data['device'] : null,
+            $context
         );
     }
     Notify::logWebhook(

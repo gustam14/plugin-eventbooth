@@ -169,7 +169,7 @@ $s = $settings ?? Notify::defaults();
                 <input type="checkbox" name="wa_booking_enabled" value="1" <?= !empty($s['wa_booking_enabled']) ? 'checked' : '' ?> <?= $isAdmin ? '' : 'disabled' ?>>
                 Terima booking dari pesan WhatsApp (webhook MPWA)
             </label>
-            <div class="hint">Calon klien mengirim pesan berformat baku ke nomor WhatsApp-mu; booking otomatis tercatat (Buku Klien + event Draf + notifikasi ke kamu) dan klien menerima balasan konfirmasi. Pesan biasa yang tidak berformat <strong>diabaikan diam-diam</strong> — percakapan normal tidak terganggu. Pesan yang menyebut "booking" tetapi formatnya belum terbaca akan dibalas contoh format (maksimal 1x per jam per nomor).</div>
+            <div class="hint">Calon klien mengirim pesan berformat baku ke nomor WhatsApp-mu; booking otomatis tercatat (Buku Klien + event Draf + notifikasi ke kamu) dan klien menerima balasan konfirmasi. Pesan biasa yang tidak berformat <strong>diabaikan diam-diam</strong> — percakapan normal tidak terganggu. Booking lengkap yang dikirim dari <strong>nomormu sendiri</strong> (mis. kamu mencatat booking lewat chat pribadi) atau dari <strong>dalam grup</strong> juga diproses; selain yang lengkap, pesan dari kedua arah itu dilewati diam-diam. Pesan yang menyebut "booking" tetapi formatnya belum terbaca akan dibalas contoh format (maksimal 1x per jam per nomor).</div>
             <?php if (!empty($webhookUrl)): ?>
                 <div class="field" style="margin-top: 10px;">
                     <label>URL Webhook MPWA kamu</label>

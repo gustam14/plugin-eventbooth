@@ -539,8 +539,11 @@ final class Notify
             $data = array_merge($data, $data['data']);
         }
 
+        // Dokumen MPWA: 'from' = nomor pengirim. Field 'sender'
+        // pada sebagian versi justru berisi nomor PERANGKAT,
+        // jadi 'from' didahulukan.
         $sender = null;
-        foreach (['sender', 'from', 'number', 'pengirim', 'participant', 'chatId'] as $key) {
+        foreach (['from', 'sender', 'number', 'pengirim', 'chatId'] as $key) {
             if (isset($data[$key]) && is_scalar($data[$key]) && trim((string) $data[$key]) !== '') {
                 $sender = (string) $data[$key];
                 break;
@@ -571,12 +574,22 @@ final class Notify
             }
         }
 
-        // Format MPWA: field 'participant' hanya terisi pada
-        // pesan grup — perlakukan sebagai penanda grup juga.
+        // Grup dikenali dari JID grup (@g.us) atau flag
+        // eksplisit — BUKAN dari keberadaan 'participant':
+        // pada payload MPWA nyata field itu bisa terisi juga
+        // untuk pesan pribadi (uji 11 Nov: semua pesan pribadi
+        // sempat terbaca grup). Bila benar grup, pengirim
+        // sesungguhnya adalah participant.
         $isGroup = !empty($data['isGroup']) || !empty($data['is_group'])
-            || !empty($data['participant'])
             || (isset($data['from']) && is_string($data['from']) && str_contains($data['from'], '@g.us'))
             || (isset($data['chatId']) && is_string($data['chatId']) && str_contains($data['chatId'], '@g.us'));
+        if ($isGroup && isset($data['participant']) && is_scalar($data['participant'])
+            && trim((string) $data['participant']) !== '') {
+            $participant = (string) $data['participant'];
+            $sender = str_contains($participant, '@')
+                ? (strstr($participant, '@', true) ?: $participant)
+                : $participant;
+        }
         $fromMe = !empty($data['fromMe']) || !empty($data['from_me'])
             || (isset($data['type']) && is_string($data['type']) && stripos($data['type'], 'outgoing') !== false);
 
@@ -733,7 +746,7 @@ final class Notify
      * ignored | disabled | guidance | guidance_limited |
      * duplicate | created | error.
      */
-    public static function processWaBooking(PDO $pdo, int $tenantId, string $senderRaw, string $text, ?string $deviceRaw = null): string
+    public static function processWaBooking(PDO $pdo, int $tenantId, string $senderRaw, string $text, ?string $deviceRaw = null, string $context = 'direct'): string
     {
         try {
             $settings = self::settings($pdo, $tenantId);
@@ -760,13 +773,27 @@ final class Notify
             }
 
             $parsed = self::parseBookingText($text);
-            $mentionsBooking = stripos($text, 'booking') !== false;
-            if ($parsed['labels'] < 2 && !$mentionsBooking) {
+            $date = $parsed['tanggal'] !== '' ? self::parseDateId($parsed['tanggal']) : null;
+            $coreOk = $parsed['nama'] !== '' && $parsed['paket'] !== '' && $date !== null;
+
+            if ($context !== 'direct') {
+                // Pesan dari nomor tenant sendiri ('self') atau
+                // dari grup ('group') — diminta pemilik agar
+                // tetap bisa diproses (mis. tenant mencatat
+                // booking dari chat-nya sendiri, atau klien
+                // mengirim format di grup). Pengaman: HANYA
+                // booking lengkap & sah yang diproses; selain
+                // itu dilewati diam-diam — balasan chat biasa
+                // milik tenant tidak akan tercatat sebagai
+                // booking dan tidak ada balasan panduan ke
+                // arah sana. Anti-dobel di bawah tetap berlaku.
+                if (!$coreOk) {
+                    return 'ignored_self_or_group';
+                }
+            } elseif ($parsed['labels'] < 2 && stripos($text, 'booking') === false) {
                 return 'ignored';
             }
 
-            $date = $parsed['tanggal'] !== '' ? self::parseDateId($parsed['tanggal']) : null;
-            $coreOk = $parsed['nama'] !== '' && $parsed['paket'] !== '' && $date !== null;
             if (!$coreOk) {
                 // Terlihat seperti niat booking tetapi formatnya
                 // belum terbaca: balas contoh format (maks 1x/jam
