@@ -1097,7 +1097,10 @@ $router->post('/admin/drive/{id}/test', static function (array $params) use ($go
         } catch (PDOException) {
             // Abaikan: pesan error utama sudah jelas.
         }
-        Flash::error('Tes koneksi akun ' . $email . ' gagal — Google menolak tokennya. Coba kaitkan ulang akun ini.');
+        $tokenDetail = GoogleDrive::$lastTokenError;
+        Flash::error('Tes koneksi akun ' . $email . ' gagal — Google menolak tokennya'
+            . ($tokenDetail !== null && $tokenDetail !== '' ? ' (' . $tokenDetail . ')' : '')
+            . '. Coba kaitkan ulang akun ini.');
         redirect('/admin/drive');
     }
 
@@ -3771,6 +3774,82 @@ $router->get('/api/automation/retention-candidates', static function () use ($au
  * membawa teks pemberitahuan WhatsApp siap kirim untuk
  * workflow.
  */
+/**
+ * Kesehatan token Google Drive (v0.26.0, diminta pemilik setelah
+ * token akun pusat ditolak Google di tengah acara 11 Nov 2026):
+ * dipanggil workflow harian — setiap akun yang masih terdaftar
+ * "dipakai" (refresh token ditukar + info akun dibaca), sehingga
+ * (1) token tidak mati karena lama tidak dipakai, (2) status
+ * akun di database selalu mencerminkan kenyataan (gagal →
+ * 'error'; pulih sendiri misalnya gangguan sesaat → kembali
+ * 'connected' + kuota diperbarui), dan (3) workflow dapat
+ * memperingatkan pemilik lewat WhatsApp SEBELUM ada event,
+ * bukan ketahuan di tengah acara.
+ */
+$router->get('/api/automation/drive-health', static function () use ($automationGuard, $googleCredentials): void {
+    $pdo = $automationGuard();
+    $creds = $googleCredentials($pdo);
+    $clientSecret = $creds['secret_cipher'] !== null ? Crypto::decrypt($creds['secret_cipher']) : null;
+
+    $results = [];
+    $failing = 0;
+    foreach (GoogleAccount::all($pdo) as $account) {
+        $accountId = (int) $account['id'];
+        $status = (string) ($account['status'] ?? '');
+        $ok = false;
+        $error = null;
+        $about = null;
+
+        $refreshToken = Crypto::decrypt((string) ($account['refresh_token_encrypted'] ?? ''));
+        if ($creds['client_id'] === '' || $clientSecret === null || $clientSecret === ''
+            || $refreshToken === null || $refreshToken === '') {
+            $error = 'credentials_incomplete';
+        } else {
+            $accessToken = GoogleDrive::refreshAccessToken($creds['client_id'], $clientSecret, $refreshToken);
+            if ($accessToken === null) {
+                $error = GoogleDrive::$lastTokenError ?? 'token_rejected';
+            } else {
+                $about = GoogleDrive::about($accessToken);
+                if ($about === null) {
+                    $error = 'about_failed';
+                } else {
+                    $ok = true;
+                }
+            }
+        }
+
+        try {
+            if ($ok && $about !== null) {
+                GoogleAccount::updateQuota($pdo, $accountId, $about['quota_total'], $about['quota_used']);
+                if ($status !== 'connected') {
+                    GoogleAccount::setStatus($pdo, $accountId, 'connected');
+                }
+            } elseif (!$ok) {
+                $failing++;
+                if ($status !== 'error') {
+                    GoogleAccount::setStatus($pdo, $accountId, 'error');
+                }
+            }
+        } catch (PDOException) {
+            // Penulisan status bersifat best-effort; hasil cek
+            // tetap dilaporkan apa adanya ke workflow.
+        }
+
+        $results[] = [
+            'id' => $accountId,
+            'email' => (string) ($account['google_email'] ?? ''),
+            'ok' => $ok,
+            'error' => $error,
+        ];
+    }
+
+    Json::respond([
+        'status' => 'ok',
+        'accounts' => $results,
+        'failing' => $failing,
+    ]);
+});
+
 $router->post('/api/automation/purge-session', static function () use ($automationGuard, $readJsonBody, $googleCredentials): void {
     $pdo = $automationGuard();
     $body = $readJsonBody();

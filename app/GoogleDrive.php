@@ -84,24 +84,58 @@ final class GoogleDrive
         return $result;
     }
 
+    /**
+     * Alasan kegagalan pertukaran refresh token terakhir (v0.26.0),
+     * dalam format Google: "invalid_grant: ..." dsb., atau
+     * network_error / http_<kode> bila bukan jawaban Google.
+     * Dipakai halaman Tes Koneksi Super Admin dan endpoint
+     * kesehatan Drive otomatis agar kegagalan token tidak lagi
+     * perlu ditebak.
+     */
+    public static ?string $lastTokenError = null;
+
     /** Perbarui access token dari refresh token; null bila gagal. */
     public static function refreshAccessToken(
         string $clientId,
         string $clientSecret,
         string $refreshToken
     ): ?string {
-        $result = self::request('POST', self::TOKEN_ENDPOINT, [], [
+        self::$lastTokenError = null;
+
+        $body = http_build_query([
             'client_id' => $clientId,
             'client_secret' => $clientSecret,
             'refresh_token' => $refreshToken,
             'grant_type' => 'refresh_token',
-        ]);
+        ], '', '&', PHP_QUERY_RFC3986);
 
-        if ($result === null || !isset($result['access_token'])) {
-            return null;
+        $status = null;
+        $raw = self::send(
+            'POST',
+            self::TOKEN_ENDPOINT,
+            ['Content-Type: application/x-www-form-urlencoded'],
+            $body,
+            $status
+        );
+        $decoded = $raw !== null ? json_decode($raw, true) : null;
+
+        if ($status !== null && $status >= 200 && $status < 300
+            && is_array($decoded)
+            && isset($decoded['access_token'])
+            && (string) $decoded['access_token'] !== '') {
+            return (string) $decoded['access_token'];
         }
 
-        return (string) $result['access_token'];
+        $reason = is_array($decoded) && isset($decoded['error'])
+            ? (string) $decoded['error']
+                . (isset($decoded['error_description'])
+                    ? ': ' . (string) $decoded['error_description']
+                    : '')
+            : ($raw === null ? 'network_error' : 'http_' . (string) ($status ?? 0));
+        self::$lastTokenError = $reason;
+        error_log('Plugin Eventbooth: pertukaran refresh token Google gagal (' . $reason . ').');
+
+        return null;
     }
 
     /**
