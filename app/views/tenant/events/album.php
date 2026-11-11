@@ -140,6 +140,29 @@ foreach (($sessionsData ?? []) as $rowData) {
 </div>
 
 <div class="panel-box">
+    <h3 style="margin-top: 0;">Kru Bertugas</h3>
+    <?php if (!($crewReady ?? true)): ?>
+        <p class="hint" style="margin-bottom: 0;">Fitur kru belum aktif — jalankan migrasi database <strong>2026-11-11-tenant-ops.sql</strong> di phpMyAdmin.</p>
+    <?php elseif (($crewMembers ?? []) === []): ?>
+        <p class="hint" style="margin-bottom: 0;">Belum ada kru aktif. Tambahkan dulu anggota kru di menu <a href="/tenant/crew">Kru</a>, lalu tugaskan di sini.</p>
+    <?php else: ?>
+        <p class="hint" style="margin-bottom: 12px;">Centang kru yang bertugas pada event ini, lalu simpan. Daftar lengkap kru dikelola di menu Kru.</p>
+        <form method="post" action="/tenant/events/<?= $eventId ?>/album/crew">
+            <?= Auth::csrfField() ?>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px 22px; margin-bottom: 14px;">
+                <?php foreach ($crewMembers as $member): ?>
+                    <label class="check" style="margin: 0;">
+                        <input type="checkbox" name="crew_ids[]" value="<?= (int) $member['id'] ?>"<?= in_array((int) $member['id'], $crewAssignedIds ?? [], true) ? ' checked' : '' ?>>
+                        <?= e((string) $member['name']) ?><?php if (!empty($member['role'])): ?> <span class="hint">(<?= e((string) $member['role']) ?>)</span><?php endif; ?>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+            <button class="btn btn-primary" type="submit">Simpan Kru Bertugas</button>
+        </form>
+    <?php endif; ?>
+</div>
+
+<div class="panel-box">
     <h3 style="margin-top: 0;">Unggah Berkas ke Galeri</h3>
     <p class="hint" style="margin-bottom: 12px;">
         Foto (JPG/PNG), GIF, atau boomerang/video (MP4/MOV), maks 25 MB per berkas.

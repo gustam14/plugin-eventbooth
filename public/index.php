@@ -3337,6 +3337,624 @@ $router->post('/tenant/packages/{id}', static function (array $params): void {
 });
 
 /* ---------------------------------------------------------------------
+ * Fitur operasional tenant (v0.28.0, diminta pemilik):
+ *   1. Daftar Paket  — katalog paket tingkat tenant yang dapat
+ *      disalin ke event mana pun (package_templates).
+ *   2. Manajemen Kru — anggota kru tenant + penugasan per event
+ *      (crew_members + event_crew; penugasan diatur dari panel
+ *      Kru Bertugas di Kelola Album).
+ *   3. Buku Klien    — catatan klien & booking dengan nilai
+ *      paket, DP, dan sisa pembayaran (client_bookings).
+ * Tabel-tabelnya dibuat oleh migrasi
+ * database/migrations/2026-11-11-tenant-ops.sql; sebelum
+ * migrasi dijalankan halaman menampilkan petunjuknya.
+ * ------------------------------------------------------------------- */
+
+$router->get('/tenant/package-catalog', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $templates = [];
+    $tenantEvents = [];
+    $tablesMissing = false;
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $templates = PackageTemplate::forTenant($pdo, (int) $tenantId);
+            $tenantEvents = Event::forTenant($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $tablesMissing = true;
+        }
+    }
+
+    View::render('tenant/catalog/index', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'templates' => $templates,
+        'events' => $tenantEvents,
+        'tablesMissing' => $tablesMissing,
+    ]);
+});
+
+$router->get('/tenant/package-catalog/create', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    View::render('tenant/catalog/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Tambah Paket',
+        'action' => '/tenant/package-catalog',
+        'values' => PackageTemplate::formValues(),
+        'errors' => [],
+    ]);
+});
+
+$router->post('/tenant/package-catalog', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, paket belum dapat disimpan.');
+        redirect('/tenant');
+    }
+    $tenantId = (int) $tenantId;
+
+    [$data, $errors] = PackageTemplate::validate($_POST);
+    if ($errors !== []) {
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('tenant/catalog/form', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'heading' => 'Tambah Paket',
+            'action' => '/tenant/package-catalog',
+            'values' => PackageTemplate::formValues(null, $_POST),
+            'errors' => $errors,
+        ], 422);
+        return;
+    }
+
+    try {
+        PackageTemplate::create($pdo, $tenantId, $data);
+    } catch (PDOException) {
+        Flash::error('Paket gagal disimpan — pastikan migrasi database 2026-11-11-tenant-ops.sql sudah dijalankan.');
+        redirect('/tenant/package-catalog');
+    }
+
+    Flash::success('Paket "' . (string) $data['name'] . '" ditambahkan ke daftar paket.');
+    redirect('/tenant/package-catalog');
+});
+
+$router->get('/tenant/package-catalog/{id}/edit', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    $template = null;
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $template = PackageTemplate::findForTenant($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
+        } catch (PDOException) {
+            $template = null;
+        }
+    }
+    if ($template === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    View::render('tenant/catalog/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Ubah Paket',
+        'action' => '/tenant/package-catalog/' . (int) $template['id'],
+        'values' => PackageTemplate::formValues($template),
+        'errors' => [],
+    ]);
+});
+
+$router->post('/tenant/package-catalog/{id}', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, paket belum dapat disimpan.');
+        redirect('/tenant');
+    }
+    $tenantId = (int) $tenantId;
+
+    $id = (int) ($params['id'] ?? 0);
+    $template = PackageTemplate::findForTenant($pdo, $tenantId, $id);
+    if ($template === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    [$data, $errors] = PackageTemplate::validate($_POST);
+    if ($errors !== []) {
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('tenant/catalog/form', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'heading' => 'Ubah Paket',
+            'action' => '/tenant/package-catalog/' . $id,
+            'values' => PackageTemplate::formValues($template, $_POST),
+            'errors' => $errors,
+        ], 422);
+        return;
+    }
+
+    try {
+        PackageTemplate::update($pdo, $id, $data);
+    } catch (PDOException) {
+        Flash::error('Paket gagal disimpan. Silakan coba lagi.');
+        redirect('/tenant/package-catalog/' . $id . '/edit');
+    }
+
+    Flash::success('Paket "' . (string) $data['name'] . '" berhasil diperbarui.');
+    redirect('/tenant/package-catalog');
+});
+
+$router->post('/tenant/package-catalog/{id}/delete', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        redirect('/tenant');
+    }
+
+    try {
+        PackageTemplate::delete($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
+        Flash::success('Paket dihapus dari daftar. Paket pada event yang sudah terlanjur memakai salinannya tidak ikut terhapus.');
+    } catch (PDOException) {
+        Flash::error('Paket gagal dihapus. Silakan coba lagi.');
+    }
+    redirect('/tenant/package-catalog');
+});
+
+$router->post('/tenant/package-catalog/{id}/apply', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        redirect('/tenant');
+    }
+    $tenantId = (int) $tenantId;
+
+    $template = PackageTemplate::findForTenant($pdo, $tenantId, (int) ($params['id'] ?? 0));
+    $eventId = isset($_POST['event_id']) && is_numeric($_POST['event_id']) ? (int) $_POST['event_id'] : 0;
+    $event = $eventId > 0 ? Event::findForTenant($pdo, $tenantId, $eventId) : null;
+    if ($template === null || $event === null) {
+        Flash::error('Pilih event tujuan yang valid untuk menyalin paket ini.');
+        redirect('/tenant/package-catalog');
+    }
+
+    try {
+        PackageTemplate::applyToEvent($pdo, $template, (int) $event['id']);
+    } catch (PDOException) {
+        Flash::error('Paket gagal disalin ke event. Silakan coba lagi.');
+        redirect('/tenant/package-catalog');
+    }
+
+    Flash::success('Paket "' . (string) $template['name'] . '" disalin ke event "' . (string) $event['name'] . '". Atur lebih lanjut di menu Paket Sesi.');
+    redirect('/tenant/package-catalog');
+});
+
+/* ---------------- Manajemen Kru ---------------- */
+
+$router->get('/tenant/crew', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $members = [];
+    $tablesMissing = false;
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $members = Crew::forTenant($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $tablesMissing = true;
+        }
+    }
+
+    View::render('tenant/crew/index', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'members' => $members,
+        'tablesMissing' => $tablesMissing,
+    ]);
+});
+
+$router->get('/tenant/crew/create', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    View::render('tenant/crew/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Tambah Kru',
+        'action' => '/tenant/crew',
+        'values' => Crew::formValues(),
+        'errors' => [],
+    ]);
+});
+
+$router->post('/tenant/crew', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, kru belum dapat disimpan.');
+        redirect('/tenant');
+    }
+    $tenantId = (int) $tenantId;
+
+    [$data, $errors] = Crew::validate($_POST);
+    if ($errors !== []) {
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('tenant/crew/form', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'heading' => 'Tambah Kru',
+            'action' => '/tenant/crew',
+            'values' => Crew::formValues(null, $_POST),
+            'errors' => $errors,
+        ], 422);
+        return;
+    }
+
+    try {
+        Crew::create($pdo, $tenantId, $data);
+    } catch (PDOException) {
+        Flash::error('Kru gagal disimpan — pastikan migrasi database 2026-11-11-tenant-ops.sql sudah dijalankan.');
+        redirect('/tenant/crew');
+    }
+
+    Flash::success('Kru "' . (string) $data['name'] . '" ditambahkan.');
+    redirect('/tenant/crew');
+});
+
+$router->get('/tenant/crew/{id}/edit', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    $member = null;
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $member = Crew::findForTenant($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
+        } catch (PDOException) {
+            $member = null;
+        }
+    }
+    if ($member === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    View::render('tenant/crew/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Ubah Kru',
+        'action' => '/tenant/crew/' . (int) $member['id'],
+        'values' => Crew::formValues($member),
+        'errors' => [],
+    ]);
+});
+
+$router->post('/tenant/crew/{id}', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, kru belum dapat disimpan.');
+        redirect('/tenant');
+    }
+    $tenantId = (int) $tenantId;
+
+    $id = (int) ($params['id'] ?? 0);
+    $member = Crew::findForTenant($pdo, $tenantId, $id);
+    if ($member === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    [$data, $errors] = Crew::validate($_POST);
+    if ($errors !== []) {
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('tenant/crew/form', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'heading' => 'Ubah Kru',
+            'action' => '/tenant/crew/' . $id,
+            'values' => Crew::formValues($member, $_POST),
+            'errors' => $errors,
+        ], 422);
+        return;
+    }
+
+    try {
+        Crew::update($pdo, $id, $data);
+    } catch (PDOException) {
+        Flash::error('Kru gagal disimpan. Silakan coba lagi.');
+        redirect('/tenant/crew/' . $id . '/edit');
+    }
+
+    Flash::success('Kru "' . (string) $data['name'] . '" berhasil diperbarui.');
+    redirect('/tenant/crew');
+});
+
+$router->post('/tenant/crew/{id}/delete', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        redirect('/tenant');
+    }
+
+    try {
+        Crew::delete($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
+        Flash::success('Kru dihapus beserta penugasannya pada event.');
+    } catch (PDOException) {
+        Flash::error('Kru gagal dihapus. Silakan coba lagi.');
+    }
+    redirect('/tenant/crew');
+});
+
+/* ---------------- Buku Klien ---------------- */
+
+$router->get('/tenant/clients', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $bookings = [];
+    $stats = ['active_count' => 0, 'active_total' => 0.0, 'outstanding' => 0.0];
+    $tablesMissing = false;
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    $query = isset($_GET['q']) && is_string($_GET['q']) ? trim($_GET['q']) : '';
+    $status = isset($_GET['status']) && is_string($_GET['status']) ? $_GET['status'] : '';
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $bookings = ClientBook::forTenant($pdo, (int) $tenantId, $query, $status);
+            $stats = ClientBook::stats($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $tablesMissing = true;
+        }
+    }
+
+    View::render('tenant/clients/index', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'bookings' => $bookings,
+        'stats' => $stats,
+        'query' => $query,
+        'statusFilter' => $status,
+        'tablesMissing' => $tablesMissing,
+    ]);
+});
+
+$router->get('/tenant/clients/create', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    $tenantEvents = [];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $tenantEvents = Event::forTenant($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $tenantEvents = [];
+        }
+    }
+
+    View::render('tenant/clients/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Tambah Klien',
+        'action' => '/tenant/clients',
+        'values' => ClientBook::formValues(),
+        'errors' => [],
+        'events' => $tenantEvents,
+    ]);
+});
+
+$router->post('/tenant/clients', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, klien belum dapat disimpan.');
+        redirect('/tenant');
+    }
+    $tenantId = (int) $tenantId;
+
+    [$data, $errors] = ClientBook::validate($pdo, $tenantId, $_POST);
+    if ($errors !== []) {
+        $tenantEvents = [];
+        try {
+            $tenantEvents = Event::forTenant($pdo, $tenantId);
+        } catch (PDOException) {
+            $tenantEvents = [];
+        }
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('tenant/clients/form', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'heading' => 'Tambah Klien',
+            'action' => '/tenant/clients',
+            'values' => ClientBook::formValues(null, $_POST),
+            'errors' => $errors,
+            'events' => $tenantEvents,
+        ], 422);
+        return;
+    }
+
+    try {
+        ClientBook::create($pdo, $tenantId, $data);
+    } catch (PDOException) {
+        Flash::error('Klien gagal disimpan — pastikan migrasi database 2026-11-11-tenant-ops.sql sudah dijalankan.');
+        redirect('/tenant/clients');
+    }
+
+    Flash::success('Klien "' . (string) $data['client_name'] . '" ditambahkan ke buku klien.');
+    redirect('/tenant/clients');
+});
+
+$router->get('/tenant/clients/{id}/edit', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    $booking = null;
+    $tenantEvents = [];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $booking = ClientBook::findForTenant($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
+            $tenantEvents = Event::forTenant($pdo, (int) $tenantId);
+        } catch (PDOException) {
+            $booking = null;
+        }
+    }
+    if ($booking === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    View::render('tenant/clients/form', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'heading' => 'Ubah Klien',
+        'action' => '/tenant/clients/' . (int) $booking['id'],
+        'values' => ClientBook::formValues($booking),
+        'errors' => [],
+        'events' => $tenantEvents,
+    ]);
+});
+
+$router->post('/tenant/clients/{id}', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, klien belum dapat disimpan.');
+        redirect('/tenant');
+    }
+    $tenantId = (int) $tenantId;
+
+    $id = (int) ($params['id'] ?? 0);
+    $booking = ClientBook::findForTenant($pdo, $tenantId, $id);
+    if ($booking === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    [$data, $errors] = ClientBook::validate($pdo, $tenantId, $_POST);
+    if ($errors !== []) {
+        $tenantEvents = [];
+        try {
+            $tenantEvents = Event::forTenant($pdo, $tenantId);
+        } catch (PDOException) {
+            $tenantEvents = [];
+        }
+        $flashes = Flash::pull();
+        $flashes[] = ['type' => 'error', 'message' => 'Periksa kembali isian formulir di bawah ini.'];
+        View::render('tenant/clients/form', [
+            'appName' => Config::appName(),
+            'user' => $user,
+            'flashes' => $flashes,
+            'heading' => 'Ubah Klien',
+            'action' => '/tenant/clients/' . $id,
+            'values' => ClientBook::formValues($booking, $_POST),
+            'errors' => $errors,
+            'events' => $tenantEvents,
+        ], 422);
+        return;
+    }
+
+    try {
+        ClientBook::update($pdo, $id, $data);
+    } catch (PDOException) {
+        Flash::error('Klien gagal disimpan. Silakan coba lagi.');
+        redirect('/tenant/clients/' . $id . '/edit');
+    }
+
+    Flash::success('Klien "' . (string) $data['client_name'] . '" berhasil diperbarui.');
+    redirect('/tenant/clients');
+});
+
+$router->post('/tenant/clients/{id}/delete', static function (array $params): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        redirect('/tenant');
+    }
+
+    try {
+        ClientBook::delete($pdo, (int) $tenantId, (int) ($params['id'] ?? 0));
+        Flash::success('Catatan klien dihapus dari buku klien.');
+    } catch (PDOException) {
+        Flash::error('Catatan klien gagal dihapus. Silakan coba lagi.');
+    }
+    redirect('/tenant/clients');
+});
+
+/* ---------------------------------------------------------------------
  * API — health check
  * ------------------------------------------------------------------- */
 $router->get('/api/health', static function (): void {
@@ -5077,6 +5695,23 @@ $router->get('/tenant/events/{id}/album', static function (array $params) use ($
         $retention = ['days' => 0, 'plan_name' => '', 'overridden' => false];
     }
 
+    // Kru bertugas pada event ini (v0.28.0): kru aktif tenant
+    // + siapa yang sudah ditugaskan. Toleran pramigrasi —
+    // panelnya menampilkan petunjuk migrasi bila tabel belum ada.
+    $crewMembers = [];
+    $crewAssigned = [];
+    $crewReady = true;
+    try {
+        $crewMembers = Crew::forTenant($pdo, $tenantId, true);
+        foreach (Crew::forEvent($pdo, (int) $event['id']) as $assigned) {
+            $crewAssigned[] = (int) $assigned['id'];
+        }
+    } catch (PDOException) {
+        $crewMembers = [];
+        $crewAssigned = [];
+        $crewReady = false;
+    }
+
     View::render('tenant/events/album', [
         'appName' => Config::appName(),
         'appUrl' => Config::appUrl(),
@@ -5089,7 +5724,45 @@ $router->get('/tenant/events/{id}/album', static function (array $params) use ($
         'retentionOverridden' => (bool) ($retention['overridden'] ?? false),
         'eventBannerUrl' => Branding::bannerUrl(isset($event['banner_image']) ? (string) $event['banner_image'] : null),
         'tenantBannerUrl' => Branding::forTenantId($pdo, $tenantId)['banner_url'],
+        'crewMembers' => $crewMembers,
+        'crewAssignedIds' => $crewAssigned,
+        'crewReady' => $crewReady,
     ]);
+});
+
+/** Simpan penugasan kru bertugas dari panel Kelola Album (v0.28.0). */
+$router->post('/tenant/events/{id}/album/crew', static function (array $params) use ($tenantAlbumEvent): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'] !== null ? (int) $user['tenant_id'] : 0;
+    if ($pdo === null || $tenantId <= 0) {
+        redirect('/tenant');
+    }
+    $event = $tenantAlbumEvent($pdo, $tenantId, $params);
+    if ($event === null) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/events');
+    }
+    $back = '/tenant/events/' . (int) $event['id'] . '/album';
+
+    $ids = [];
+    if (isset($_POST['crew_ids']) && is_array($_POST['crew_ids'])) {
+        foreach ($_POST['crew_ids'] as $raw) {
+            if (is_numeric($raw)) {
+                $ids[] = (int) $raw;
+            }
+        }
+    }
+
+    try {
+        Crew::setAssignments($pdo, $tenantId, (int) $event['id'], $ids);
+        Flash::success('Kru bertugas untuk event "' . (string) $event['name'] . '" berhasil disimpan.');
+    } catch (PDOException) {
+        Flash::error('Penugasan kru gagal disimpan — pastikan migrasi database 2026-11-11-tenant-ops.sql sudah dijalankan.');
+    }
+    redirect($back);
 });
 
 /* ---------------------------------------------------------------------
