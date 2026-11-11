@@ -3098,11 +3098,18 @@ $router->post('/tenant/events', static function (): void {
         // Pemeriksaan batas gagal dibaca: pembuatan tetap dicoba.
     }
 
+    $newEventId = null;
     try {
-        Event::create($pdo, $tenantId, $data);
+        $newEventId = Event::create($pdo, $tenantId, $data);
     } catch (PDOException) {
         Flash::error('Event gagal disimpan. Silakan coba lagi.');
         redirect('/tenant/events/create');
+    }
+
+    // Notifikasi WA konfirmasi booking ke klien (bila tenant
+    // mengaktifkannya di menu Notifikasi; best-effort).
+    if ($newEventId !== null && !empty($data['client_id'])) {
+        Notify::notifyClientBooking($pdo, $tenantId, $newEventId);
     }
 
     Flash::success('Event "' . (string) $data['name'] . '" berhasil dibuat.');
@@ -3436,6 +3443,373 @@ $router->post('/tenant/packages/{id}', static function (array $params): void {
 
     Flash::success('Paket "' . (string) $data['name'] . '" berhasil diperbarui.');
     redirect('/tenant/packages');
+});
+
+/* ---------------------------------------------------------------------
+ * Notifikasi WhatsApp tenant (v0.33.0, diminta pemilik):
+ * menu /tenant/notifications mengatur pesan berbagi galeri
+ * aplikasi booth, notifikasi klien & kru, dan form booking
+ * publik. Pengiriman dijembatani MPWA platform lewat kelas
+ * Notify; tabel tenant_notifications + booking_requests dari
+ * migrasi 2026-11-11-notifications.sql.
+ * ------------------------------------------------------------------- */
+
+$router->get('/tenant/notifications', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+
+    $settings = Notify::defaults();
+    $requests = [];
+    $manualEvents = [];
+    $gatewayReady = false;
+    $tablesMissing = false;
+    $tenant = null;
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo !== null && $tenantId !== null) {
+        try {
+            $tenant = Tenant::find($pdo, (int) $tenantId);
+            $settings = Notify::settings($pdo, (int) $tenantId);
+            $requests = Notify::requests($pdo, (int) $tenantId);
+            $gatewayReady = Notify::gatewayReady($pdo);
+            // Migrasi belum jalan bila tabel pengaturan tidak ada.
+            $pdo->query('SELECT 1 FROM tenant_notifications LIMIT 1');
+        } catch (PDOException) {
+            $tablesMissing = true;
+        }
+        try {
+            foreach (Event::forTenant($pdo, (int) $tenantId) as $eventRow) {
+                if (!empty($eventRow['client_id'])) {
+                    $manualEvents[] = $eventRow;
+                }
+                if (count($manualEvents) >= 10) {
+                    break;
+                }
+            }
+        } catch (PDOException) {
+            $manualEvents = [];
+        }
+    }
+
+    View::render('tenant/notifications', [
+        'appName' => Config::appName(),
+        'user' => $user,
+        'flashes' => Flash::pull(),
+        'settings' => $settings,
+        'requests' => $requests,
+        'manualEvents' => $manualEvents,
+        'gatewayReady' => $gatewayReady,
+        'tablesMissing' => $tablesMissing,
+        'tenant' => $tenant,
+        'bookingUrl' => $tenant !== null && !empty($tenant['slug'])
+            ? Config::appUrl() . '/booking/' . (string) $tenant['slug']
+            : null,
+        'appUrl' => Config::appUrl(),
+    ]);
+});
+
+$router->post('/tenant/notifications', static function (): void {
+    $user = Auth::requireRole('tenant_admin');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    if ($pdo === null || $tenantId === null) {
+        Flash::error('Database belum disetel, pengaturan belum dapat disimpan.');
+        redirect('/tenant/notifications');
+    }
+
+    [$data, $errors] = Notify::validateSettings($_POST);
+    if ($errors !== []) {
+        Flash::error('Periksa kembali template pesanmu: ' . implode(' ', array_values($errors)));
+        redirect('/tenant/notifications');
+    }
+
+    try {
+        Notify::save($pdo, (int) $tenantId, $data);
+        Flash::success('Pengaturan notifikasi tersimpan.');
+    } catch (PDOException) {
+        Flash::error('Pengaturan gagal disimpan — pastikan migrasi database 2026-11-11-notifications.sql sudah dijalankan.');
+    }
+    redirect('/tenant/notifications');
+});
+
+$router->post('/tenant/notifications/send-reminder', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    $eventId = isset($_POST['event_id']) && is_numeric($_POST['event_id']) ? (int) $_POST['event_id'] : 0;
+    if ($pdo === null || $tenantId === null || $eventId <= 0) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/notifications');
+    }
+    $tenant = Tenant::find($pdo, (int) $tenantId);
+    $event = Event::findForTenant($pdo, (int) $tenantId, $eventId);
+    $client = ($event !== null && !empty($event['client_id']))
+        ? ClientBook::findForTenant($pdo, (int) $tenantId, (int) $event['client_id'])
+        : null;
+    if ($tenant === null || $event === null || $client === null || empty($client['whatsapp'])) {
+        Flash::error('Event ini tidak memiliki klien dengan nomor WhatsApp.');
+        redirect('/tenant/notifications');
+    }
+    if (Mpwa::sendText($pdo, (string) $client['whatsapp'], Notify::reminderMessage($tenant, $event, $client))) {
+        Flash::success('Pengingat pembayaran terkirim ke WhatsApp ' . (string) $client['client_name'] . '.');
+    } else {
+        Flash::error('Pesan belum terkirim — gateway WhatsApp platform belum diatur atau sedang gangguan. Coba lagi nanti.');
+    }
+    redirect('/tenant/notifications');
+});
+
+$router->post('/tenant/notifications/send-album', static function (): void {
+    $user = Auth::requireRole('tenant_admin', 'tenant_staff');
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenantId = $user['tenant_id'];
+    $eventId = isset($_POST['event_id']) && is_numeric($_POST['event_id']) ? (int) $_POST['event_id'] : 0;
+    if ($pdo === null || $tenantId === null || $eventId <= 0) {
+        Flash::error('Event tidak ditemukan.');
+        redirect('/tenant/notifications');
+    }
+    $tenant = Tenant::find($pdo, (int) $tenantId);
+    $event = Event::findForTenant($pdo, (int) $tenantId, $eventId);
+    $client = ($event !== null && !empty($event['client_id']))
+        ? ClientBook::findForTenant($pdo, (int) $tenantId, (int) $event['client_id'])
+        : null;
+    if ($tenant === null || $event === null || $client === null || empty($client['whatsapp'])) {
+        Flash::error('Event ini tidak memiliki klien dengan nomor WhatsApp.');
+        redirect('/tenant/notifications');
+    }
+    if (Mpwa::sendText($pdo, (string) $client['whatsapp'], Notify::albumMessage($tenant, $event))) {
+        Flash::success('Tautan album terkirim ke WhatsApp ' . (string) $client['client_name'] . '.');
+    } else {
+        Flash::error('Pesan belum terkirim — gateway WhatsApp platform belum diatur atau sedang gangguan. Coba lagi nanti.');
+    }
+    redirect('/tenant/notifications');
+});
+
+/* ---------------- Form booking publik ---------------- */
+
+$router->get('/booking/{slug}', static function (array $params): void {
+    $pdo = Database::pdo();
+    $tenant = null;
+    if ($pdo !== null) {
+        try {
+            $stmt = $pdo->prepare('SELECT * FROM tenants WHERE slug = :slug LIMIT 1');
+            $stmt->execute(['slug' => (string) ($params['slug'] ?? '')]);
+            $row = $stmt->fetch();
+            $tenant = $row === false ? null : $row;
+        } catch (PDOException) {
+            $tenant = null;
+        }
+    }
+    if ($tenant === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+
+    $settings = $pdo !== null ? Notify::settings($pdo, (int) $tenant['id']) : Notify::defaults();
+    $packages = [];
+    if ($pdo !== null && !empty($settings['booking_form_enabled'])) {
+        try {
+            $packages = PackageTemplate::options($pdo, (int) $tenant['id']);
+        } catch (PDOException) {
+            $packages = [];
+        }
+    }
+
+    View::render('booking/form', [
+        'appName' => Config::appName(),
+        'appUrl' => Config::appUrl(),
+        'tenant' => $tenant,
+        'formEnabled' => !empty($settings['booking_form_enabled']),
+        'packages' => $packages,
+        'values' => ['name' => '', 'whatsapp' => '', 'address' => '', 'event_date' => '', 'package_id' => '', 'notes' => ''],
+        'errors' => [],
+        'submitted' => false,
+    ]);
+});
+
+$router->post('/booking/{slug}', static function (array $params): void {
+    Auth::requireCsrf();
+
+    $pdo = Database::pdo();
+    $tenant = null;
+    if ($pdo !== null) {
+        try {
+            $stmt = $pdo->prepare('SELECT * FROM tenants WHERE slug = :slug LIMIT 1');
+            $stmt->execute(['slug' => (string) ($params['slug'] ?? '')]);
+            $row = $stmt->fetch();
+            $tenant = $row === false ? null : $row;
+        } catch (PDOException) {
+            $tenant = null;
+        }
+    }
+    if ($pdo === null || $tenant === null) {
+        View::render('errors/404', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+        ], 404);
+        return;
+    }
+    $tenantId = (int) $tenant['id'];
+    $settings = Notify::settings($pdo, $tenantId);
+
+    $renderForm = static function (array $values, array $errors, bool $submitted) use ($tenant, $settings, $pdo, $tenantId): void {
+        $packages = [];
+        try {
+            $packages = PackageTemplate::options($pdo, $tenantId);
+        } catch (PDOException) {
+            $packages = [];
+        }
+        View::render('booking/form', [
+            'appName' => Config::appName(),
+            'appUrl' => Config::appUrl(),
+            'tenant' => $tenant,
+            'formEnabled' => !empty($settings['booking_form_enabled']),
+            'packages' => $packages,
+            'values' => $values,
+            'errors' => $errors,
+            'submitted' => $submitted,
+        ], $submitted ? 200 : 422);
+    };
+
+    $values = [
+        'name' => trim((string) ($_POST['name'] ?? '')),
+        'whatsapp' => trim((string) ($_POST['whatsapp'] ?? '')),
+        'address' => trim((string) ($_POST['address'] ?? '')),
+        'event_date' => trim((string) ($_POST['event_date'] ?? '')),
+        'package_id' => isset($_POST['package_id']) && is_numeric($_POST['package_id']) ? (string) (int) $_POST['package_id'] : '',
+        'notes' => trim((string) ($_POST['notes'] ?? '')),
+    ];
+
+    if (empty($settings['booking_form_enabled'])) {
+        $renderForm($values, [], false);
+        return;
+    }
+
+    // Honeypot anti-spam: kolom "website" disembunyikan dari
+    // manusia; bot yang mengisinya dianggap sudah berhasil.
+    if (trim((string) ($_POST['website'] ?? '')) !== '') {
+        $renderForm($values, [], true);
+        return;
+    }
+
+    $errors = [];
+    if ($values['name'] === '') {
+        $errors['name'] = 'Nama wajib diisi.';
+    }
+    $normalizedWa = Whatsapp::normalize($values['whatsapp']);
+    if ($normalizedWa === null) {
+        $errors['whatsapp'] = 'Nomor WhatsApp tidak sah. Gunakan format 08…';
+    }
+    if ($values['event_date'] !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $values['event_date']) !== 1) {
+        $errors['event_date'] = 'Tanggal acara tidak sah.';
+        $values['event_date'] = '';
+    }
+    if ($errors !== []) {
+        $renderForm($values, $errors, false);
+        return;
+    }
+
+    // Paket yang dipilih (harus milik tenant ini & aktif).
+    $packageName = null;
+    $packagePrice = null;
+    if ($values['package_id'] !== '') {
+        try {
+            foreach (PackageTemplate::options($pdo, $tenantId) as $option) {
+                if ((int) $option['id'] === (int) $values['package_id']) {
+                    $packageName = (string) $option['name'];
+                    $packagePrice = (float) $option['price'];
+                    break;
+                }
+            }
+        } catch (PDOException) {
+            $packageName = null;
+        }
+    }
+
+    // Kiriman ganda dari nomor+tanggal yang sama dalam 10
+    // menit terakhir dianggap sudah diterima (anti dobel klik).
+    if (Notify::recentDuplicate($pdo, $tenantId, (string) $normalizedWa, $values['event_date'] !== '' ? $values['event_date'] : null)) {
+        $renderForm($values, [], true);
+        return;
+    }
+
+    // 1) Buku Klien: pakai ulang klien dengan nomor WA yang
+    //    sama, atau buat baru.
+    $clientId = null;
+    try {
+        $stmt = $pdo->prepare(
+            'SELECT id FROM client_bookings WHERE tenant_id = :t AND whatsapp = :wa LIMIT 1'
+        );
+        $stmt->execute(['t' => $tenantId, 'wa' => $values['whatsapp']]);
+        $existingClient = $stmt->fetch();
+        if ($existingClient !== false) {
+            $clientId = (int) $existingClient['id'];
+        } else {
+            $stmt = $pdo->prepare(
+                'SELECT id FROM client_bookings WHERE tenant_id = :t AND whatsapp = :wa LIMIT 1'
+            );
+            $stmt->execute(['t' => $tenantId, 'wa' => $normalizedWa]);
+            $existingClient = $stmt->fetch();
+            $clientId = $existingClient !== false
+                ? (int) $existingClient['id']
+                : ClientBook::create($pdo, $tenantId, [
+                    'client_name' => $values['name'],
+                    'whatsapp' => $values['whatsapp'],
+                    'address' => $values['address'] !== '' ? $values['address'] : null,
+                ]);
+        }
+    } catch (PDOException) {
+        $clientId = null;
+    }
+
+    // 2) Event draf otomatis dari booking ini.
+    $eventId = null;
+    try {
+        [$eventData, $eventErrors] = Event::validate($pdo, [
+            'name' => $values['name'],
+            'slug' => '',
+            'venue' => '',
+            'starts_at' => $values['event_date'] !== '' ? $values['event_date'] . ' 09:00' : '',
+            'ends_at' => '',
+            'status' => 'draft',
+            'client_id' => $clientId !== null ? (string) $clientId : '',
+            'client_package_name' => $packageName ?? '',
+            'client_total_price' => $packagePrice !== null ? (string) (int) $packagePrice : '',
+            'client_discount' => '',
+            'client_dp_paid' => '',
+        ], null, $tenantId);
+        if ($eventErrors === []) {
+            $eventId = Event::create($pdo, $tenantId, $eventData);
+        }
+    } catch (PDOException) {
+        $eventId = null;
+    }
+
+    // 3) Catat permintaan + beri tahu pemilik usaha.
+    $requestData = [
+        'client_id' => $clientId,
+        'event_id' => $eventId,
+        'name' => $values['name'],
+        'whatsapp' => $values['whatsapp'],
+        'address' => $values['address'] !== '' ? $values['address'] : null,
+        'event_date' => $values['event_date'] !== '' ? $values['event_date'] : null,
+        'package_name' => $packageName,
+        'notes' => $values['notes'] !== '' ? $values['notes'] : null,
+    ];
+    Notify::logRequest($pdo, $tenantId, $requestData);
+    Notify::notifyOwnerNewBooking($pdo, $tenantId, $requestData);
+    if ($eventId !== null) {
+        Notify::notifyClientBooking($pdo, $tenantId, $eventId);
+    }
+
+    $renderForm($values, [], true);
 });
 
 /* ---------------------------------------------------------------------
@@ -5800,9 +6174,33 @@ $router->post('/tenant/events/{id}/album/crew', static function (array $params) 
         }
     }
 
+    // Kru yang sebelumnya sudah bertugas — hanya penugasan
+    // BARU yang menerima notifikasi WA (v0.33.0).
+    $previouslyAssigned = [];
+    try {
+        foreach (Crew::forEvent($pdo, (int) $event['id']) as $assignedRow) {
+            $previouslyAssigned[] = (int) $assignedRow['id'];
+        }
+    } catch (PDOException) {
+        $previouslyAssigned = [];
+    }
+
     try {
         Crew::setAssignments($pdo, $tenantId, (int) $event['id'], $ids);
         Flash::success('Kru bertugas untuk event "' . (string) $event['name'] . '" berhasil disimpan.');
+
+        $newMembers = [];
+        foreach (Crew::forEvent($pdo, (int) $event['id']) as $assignedRow) {
+            if (!in_array((int) $assignedRow['id'], $previouslyAssigned, true)) {
+                $newMembers[] = $assignedRow;
+            }
+        }
+        if ($newMembers !== []) {
+            $sent = Notify::notifyCrewAssigned($pdo, $tenantId, $event, $newMembers);
+            if ($sent > 0) {
+                Flash::info('Notifikasi WhatsApp penugasan terkirim ke ' . $sent . ' kru baru.');
+            }
+        }
     } catch (PDOException) {
         Flash::error('Penugasan kru gagal disimpan — pastikan migrasi database 2026-11-11-tenant-ops.sql sudah dijalankan.');
     }
@@ -7325,9 +7723,20 @@ $router->post('/api/session/share-wa', static function () use ($appDeviceContext
     // URL sesi kanonis — sama seperti session_url pada pembuatan
     // sesi (POST /api/app/sessions).
     $sessionUrl = Config::appUrl() . '/s/' . (string) $session['code'];
-    $vendor = (string) ($tenant['vendor_name'] ?? 'Photobooth');
-    $message = "Halo! Foto sesi {$session['code']} di event {$session['event_name']} sudah dapat dilihat & diunduh di sini:\n"
-        . $sessionUrl . "\n\nTerima kasih sudah berfoto bersama {$vendor}!";
+
+    // Template & saklar berbagi diatur tenant di menu
+    // Notifikasi (v0.33.0); bawaan platform dipakai bila
+    // tenant belum mengaturnya.
+    $notifySettings = Notify::settings($pdo, $tenantId);
+    if (empty($notifySettings['share_enabled'])) {
+        Json::error('Berbagi via WhatsApp sedang dimatikan dari dashboard tenant. Tautan tetap dapat dibagikan lewat QR di layar.', 403, 'tenant_share_disabled');
+    }
+    $message = Notify::render((string) $notifySettings['share_template'], [
+        'kode_sesi' => (string) $session['code'],
+        'nama_event' => (string) $session['event_name'],
+        'tautan' => $sessionUrl,
+        'nama_vendor' => (string) ($tenant['vendor_name'] ?? 'Photobooth'),
+    ]);
 
     if (!Mpwa::sendText($pdo, $number, $message)) {
         Json::error(

@@ -48,6 +48,7 @@ if (($user['role'] ?? '') === 'super_admin') {
             ['key' => 'catalog', 'label' => 'Daftar Paket', 'href' => '/tenant/package-catalog'],
             ['key' => 'crew', 'label' => 'Kru', 'href' => '/tenant/crew'],
             ['key' => 'clients', 'label' => 'Buku Klien', 'href' => '/tenant/clients'],
+            ['key' => 'notify', 'label' => 'Notifikasi', 'href' => '/tenant/notifications'],
         ]],
         ['label' => 'Akun & Lisensi', 'children' => [
             ['key' => 'licenses', 'label' => 'Lisensi Saya', 'href' => '/tenant/licenses'],
