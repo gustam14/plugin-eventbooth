@@ -3465,6 +3465,7 @@ $router->get('/tenant/notifications', static function (): void {
     $tenant = null;
     $webhookUrl = null;
     $webhookLogs = [];
+    $webhookDiag = null;
     $pdo = Database::pdo();
     $tenantId = $user['tenant_id'];
     if ($pdo !== null && $tenantId !== null) {
@@ -3482,6 +3483,36 @@ $router->get('/tenant/notifications', static function (): void {
                 $webhookUrl = Config::appUrl() . '/api/wa/webhook/' . $webhookToken;
             }
             $webhookLogs = Notify::webhookLogs($pdo, (int) $tenantId);
+            // Diagnosis webhook terakhir: uraikan payload
+            // mentahnya dengan pembaca yang sama seperti
+            // endpoint, agar pemilik (dan dukungan) bisa
+            // melihat persis teks & label yang terbaca.
+            $latestWebhook = Notify::latestWebhook($pdo, (int) $tenantId);
+            if ($latestWebhook !== null) {
+                $rawPayload = (string) ($latestWebhook['payload'] ?? '');
+                $decoded = json_decode($rawPayload, true);
+                if (!is_array($decoded)) {
+                    parse_str($rawPayload, $parsedForm);
+                    $decoded = is_array($parsedForm) ? $parsedForm : [];
+                }
+                $extracted = Notify::extractWaMessage($decoded);
+                $parsedText = $extracted['text'] !== null
+                    ? Notify::parseBookingText($extracted['text'])
+                    : null;
+                $webhookDiag = [
+                    'received_at' => (string) ($latestWebhook['received_at'] ?? ''),
+                    'result' => (string) ($latestWebhook['result'] ?? ''),
+                    'sender' => $extracted['sender'],
+                    'is_group' => $extracted['isGroup'],
+                    'from_me' => $extracted['fromMe'],
+                    'text' => $extracted['text'],
+                    'parsed' => $parsedText,
+                    'parsed_date' => $parsedText !== null && $parsedText['tanggal'] !== ''
+                        ? Notify::parseDateId($parsedText['tanggal'])
+                        : null,
+                    'raw' => $rawPayload,
+                ];
+            }
         } catch (PDOException) {
             $tablesMissing = true;
         }
@@ -3515,6 +3546,7 @@ $router->get('/tenant/notifications', static function (): void {
         'appUrl' => Config::appUrl(),
         'webhookUrl' => $webhookUrl,
         'webhookLogs' => $webhookLogs,
+        'webhookDiag' => $webhookDiag,
         'bookingFormatText' => Notify::BOOKING_FORMAT_TEXT,
     ]);
 });

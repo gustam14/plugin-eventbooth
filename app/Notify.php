@@ -763,6 +763,28 @@ final class Notify
     }
 
     /**
+     * Webhook paling baru milik tenant, termasuk payload
+     * mentahnya (untuk panel diagnosis di menu Notifikasi).
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function latestWebhook(PDO $pdo, int $tenantId): ?array
+    {
+        try {
+            $stmt = $pdo->prepare(
+                'SELECT received_at, sender, matched, result, payload FROM wa_webhook_logs
+                  WHERE tenant_id = :t ORDER BY id DESC LIMIT 1'
+            );
+            $stmt->execute(['t' => $tenantId]);
+            $row = $stmt->fetch();
+
+            return $row !== false ? $row : null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
      * Proses satu pesan WA masuk menjadi booking (alur yang
      * sama seperti form booking web) dan kembalikan kode hasil:
      * ignored | disabled | guidance | guidance_limited |

@@ -204,6 +204,29 @@ $s = $settings ?? Notify::defaults();
                     <div class="hint">Hasil "created" berarti booking berhasil tercatat; "ignored" berarti pesan biasa yang memang tidak diproses.</div>
                 </div>
             <?php endif; ?>
+            <?php if (!empty($webhookDiag)): ?>
+                <div class="field" style="margin-top: 10px;">
+                    <label>Diagnosis webhook terakhir</label>
+                    <div class="hint">
+                        Hasil: <strong><?= e((string) $webhookDiag['result']) ?></strong> ·
+                        Pengirim terbaca: <?= e((string) ($webhookDiag['sender'] ?? '—')) ?> ·
+                        Konteks: <?= !empty($webhookDiag['is_group']) ? 'grup' : (!empty($webhookDiag['from_me']) ? 'pesan sendiri' : 'chat pribadi') ?>
+                        <?php if ($webhookDiag['parsed'] !== null): ?>
+                            <br>Label terbaca: <strong><?= (int) $webhookDiag['parsed']['labels'] ?>/8</strong> ·
+                            Nama: "<?= e((string) $webhookDiag['parsed']['nama']) ?>" ·
+                            Paket: "<?= e((string) $webhookDiag['parsed']['paket']) ?>" ·
+                            Tanggal: "<?= e((string) $webhookDiag['parsed']['tanggal']) ?>"
+                            → <?= $webhookDiag['parsed_date'] !== null ? e((string) $webhookDiag['parsed_date']) : 'tidak terbaca' ?>
+                        <?php endif; ?>
+                    </div>
+                    <label style="margin-top: 8px;">Teks yang terbaca sistem</label>
+                    <textarea readonly rows="6" onclick="this.select();"><?= e((string) ($webhookDiag['text'] ?? '')) ?></textarea>
+                    <details style="margin-top: 8px;">
+                        <summary>Payload mentah dari MPWA</summary>
+                        <textarea readonly rows="8" onclick="this.select();"><?= e((string) $webhookDiag['raw']) ?></textarea>
+                    </details>
+                </div>
+            <?php endif; ?>
         </fieldset>
 
         <?php if ($isAdmin): ?>
